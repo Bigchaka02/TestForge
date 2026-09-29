@@ -15,7 +15,8 @@ export interface RunDir {
 }
 
 export function createRunDir(runId: string, base = os.tmpdir()): RunDir {
-  const root = fs.mkdtempSync(path.join(base, `${PREFIX}${runId}-`));
+  // realpath: Vitest reports real paths (macOS tmpdir is a symlink).
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(base, `${PREFIX}${runId}-`)));
   fs.writeFileSync(path.join(root, SENTINEL), JSON.stringify({ owner: 'testforge', runId, created: Date.now() }));
   const tmp = path.join(root, 'tmp');
   fs.mkdirSync(tmp);

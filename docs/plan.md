@@ -9,7 +9,7 @@ Source: the pass-along spec in the kickoff message, critiqued and revised under 
 | Node / npm | Node 22.22.2, npm 10.9.7 on Linux x64 | Development and fixtures pinned to this |
 | Vitest | Latest 5.0.2. `node node_modules/vitest/vitest.mjs run --config <file> --reporter=json --outputFile=<file>` works and produces the Jest-style JSON (`testResults[].assertionResults[].status/failureMessages`) | Adapter parses this schema; tested version recorded in `toolchain.json` |
 | TypeScript | Latest 7.0.2 is the native (Go) compiler: its package exposes only a CLI, no JS compiler API. 6.0.3 is the last release with the JS API | Extension bundles `typescript@6.0.3` as its parser. Target projects may use 6.x or 7.x; only their `tsc` CLI is invoked |
-| VS Code API | `@types/vscode` 1.138.0; Language Model API (`vscode.lm.selectChatModels`, `sendRequest`, `countTokens`) is stable | Real provider uses it; no API keys |
+| VS Code API | `@types/vscode` latest is 1.138.0; pinned to 1.100.0 to match `engines.vscode ^1.100.0`. Language Model API (`vscode.lm.selectChatModels`, `sendRequest`, `countTokens`) is stable | Real provider uses it; no API keys |
 | Packaging | `@vscode/vsce` 4.0.0, `esbuild` 0.28.2 | Bundle with esbuild, package with vsce |
 | Extension-host tests | `@vscode/test-cli` 0.0.15 + `@vscode/test-electron` 3.1.0 need to download VS Code | Download host `update.code.visualstudio.com` is blocked by this environment's egress policy (403). Tests are written but this gate is recorded as **unverified** |
 | Existing tools (Rule 2) | StrykerJS does mutation testing but needs installing into the target project and mutates whole projects; zod does schema validation; Vitest's JSON reporter does result reporting | Use zod and Vitest's reporter; keep the tiny 3-operator mutation engine (see D3) |
@@ -25,15 +25,15 @@ What is overengineered for a hackathon (Rule 4) and how it is revised:
 |---|---|---|
 | 12 modules, 13 folders | ~10 source files in 6 folders | Same responsibilities, less ceremony |
 | Separate suite A and suite B mutation runs | One Vitest run per mutation; A and B outcomes read from the same report by test file | Halves runtime, same data |
-| Bounded improvement pass (Stage 9) | **Placeholder** (`improve()` returns "not run") | Spec lists it first among cuts; keeps the pipeline honest |
-| Report history retention (10 runs / 7 days) | Kept, but as one `globalState` list | Simple |
+| Bounded improvement pass (Stage 9) | **Placeholder**: the `improving` stage records a limitation when mutations survive; no extra request is sent (so a run uses at most 2 of the 3 allowed requests) | Spec lists it first among cuts; keeps the pipeline honest |
+| Report history retention (10 runs / 7 days) | Kept, as one `workspaceState` list | Simple |
 | Stale temp-dir cleanup after restart | Kept: delete owned dirs (sentinel file) older than 1 day on activation | ~15 lines |
 | Secret detection | Best-effort regex, stop with explanation | As spec says, best-effort |
 | Cross-platform process-tree kill | POSIX process groups; Windows `taskkill` via `execFile` without shell, untested | Only Linux is advertised |
 | "Apply Failing Candidate" separate command | Kept (one flag on apply) | Cheap |
 | Extension-host test suite | A small smoke suite; gate unverified here (download blocked) | Environment limit |
 | Requirements document selection | **Placeholder** setting `testforge.requirementsFile` | Nice-to-have |
-| 8 extra fixtures | 4 fixtures: age (demo), clamp, buggy, hanging | Cover the classification paths that matter |
+| 8 extra fixtures | One fixture project `fixtures/sample` with 5 modules: age (demo), clamp (no baseline, throws), discount (buggy vs requirement), slow (hang), strings (no mutations) | Cover the classification paths that matter |
 | Two runs of each suite for flakiness | Kept | One loop |
 
 Conflicts with the rules or the project:
@@ -58,7 +58,7 @@ Conflicts with the rules or the project:
 1.3 `.vscode/launch.json` for the extension host.
 
 ### Step 2 — Prove the toolchain
-2.1 `fixtures/age` npm ESM project with `isEligible`, two baseline tests, lockfile, Vitest 5.0.2, TypeScript 7.0.2.
+2.1 `fixtures/sample` npm ESM project with `isEligible`, two baseline tests, lockfile, Vitest 5.0.2, TypeScript 7.0.2.
 2.2 Runner: spawn resolved Node with `shell:false`, bounded output, deadline, cancellation (process-group kill).
 2.3 Execution workspace: temp dir with sentinel, copy files, symlink `node_modules`, write own Vitest config and tsconfig.
 2.4 Integration test: baseline runs, JSON report parses, source hashes unchanged.

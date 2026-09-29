@@ -68,7 +68,7 @@ export function classify(run: SuiteRun, suiteTests: Set<string>): { outcome: Mut
   const mine = run.tests.filter((t) => suiteTests.has(`${t.file}::${t.title}`));
   if (run.status === 'timeout' || mine.some((t) => t.timedOut)) return { outcome: 'timeout', detecting: [], note: run.error };
   if (run.status === 'error') return { outcome: 'error', detecting: [], note: run.error };
-  if (mine.length !== suiteTests.size) return { outcome: 'error', detecting: [], note: 'test identities differ from the original run' };
+  if (new Set(mine.map((t) => `${t.file}::${t.title}`)).size !== suiteTests.size) return { outcome: 'error', detecting: [], note: 'test identities differ from the original run' };
   const failed = mine.filter((t) => t.status === 'failed');
   if (failed.length) return { outcome: 'killed', detecting: failed.map((t) => t.title) };
   return { outcome: 'survived', detecting: [] };

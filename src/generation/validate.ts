@@ -53,6 +53,7 @@ function checkEvidence(c: ProposedCase, files: Map<string, EvidenceFile>): strin
     if (e.endLine < e.startLine || e.endLine > f.lines.length) return `evidence lines ${e.startLine}-${e.endLine} are outside ${f.rel}`;
     const span = f.lines.slice(e.startLine - 1, e.endLine).join('\n');
     const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+    if (!norm(e.excerpt)) return 'evidence excerpt is blank';
     if (!norm(span).includes(norm(e.excerpt))) return `evidence excerpt not found in ${f.rel}:${e.startLine}-${e.endLine}`;
   }
   return undefined;

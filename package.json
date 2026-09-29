@@ -147,7 +147,8 @@
     "test:extension": "npm run build && tsc -p test/extension && vscode-test",
     "fixtures:install": "node scripts/install-fixtures.mjs",
     "package": "npm run build && vsce package --no-dependencies -o testforge.vsix",
-    "verify": "npm run lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run test:extension && npm run package"
+    "verify": "npm run lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run package && npm run package:check && npm run test:extension",
+    "package:check": "node scripts/verify-package.mjs testforge.vsix dist/extension.js"
   },
   "devDependencies": {
     "@types/mocha": "10.0.10",

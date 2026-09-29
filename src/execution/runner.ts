@@ -192,7 +192,7 @@ let reportCounter = 0;
 
 export async function runVitest(tools: Tools, copyDir: string, tmp: string, testFiles: string[], signal?: AbortSignal): Promise<SuiteRun> {
   const reportPath = path.join(copyDir, `.testforge-report-${++reportCounter}.json`);
-  const r = await runProcess(tools.node, [tools.vitestCli, 'run', '--config', 'vitest.testforge.config.mjs', '--reporter=json', `--outputFile=${reportPath}`], {
+  const r = await runProcess(tools.node, [tools.vitestCli, 'run', '--config', 'vitest.testforge.config.mjs', '--configLoader', 'runner', '--reporter=json', `--outputFile=${reportPath}`], {
     cwd: copyDir,
     env: childEnv(tmp),
     deadlineMs: LIMITS.processDeadlineMs,
