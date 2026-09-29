@@ -1,0 +1,169 @@
+{
+  "name": "testforge",
+  "displayName": "TestForge",
+  "description": "Generate runnable Vitest tests for TypeScript functions and check which code changes they detect.",
+  "version": "0.1.0",
+  "publisher": "testforge-dev",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Bigchaka02/TestForge"
+  },
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Testing"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:typescript"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "TestForge only shows saved reports in Restricted Mode. Generating and running tests needs a trusted workspace."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "testforge.generateAndVerify",
+        "title": "Generate & Verify Tests",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.selectModel",
+        "title": "Select Model",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.cancelRun",
+        "title": "Cancel Run",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.openReport",
+        "title": "Open Report",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.previewTests",
+        "title": "Preview Generated Tests",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.applyTests",
+        "title": "Apply Tests",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.applyFailingCandidate",
+        "title": "Apply Failing Candidate",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.discardRun",
+        "title": "Discard Run",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.clearHistory",
+        "title": "Clear History",
+        "category": "TestForge"
+      },
+      {
+        "command": "testforge.runDemo",
+        "title": "Run Demo (fake model, no AI)",
+        "category": "TestForge"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "testforge.results",
+          "name": "TestForge Results"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "testforge.previewTests",
+          "when": "view == testforge.results",
+          "group": "navigation@1"
+        },
+        {
+          "command": "testforge.applyTests",
+          "when": "view == testforge.results",
+          "group": "navigation@2"
+        },
+        {
+          "command": "testforge.discardRun",
+          "when": "view == testforge.results",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "TestForge",
+      "properties": {
+        "testforge.nodePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Path to a Node.js executable. Empty means search PATH."
+        },
+        "testforge.mutationSample": {
+          "type": "number",
+          "default": 8,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Number of mutations to check."
+        },
+        "testforge.globalDeadlineSeconds": {
+          "type": "number",
+          "default": 180,
+          "minimum": 30,
+          "maximum": 600,
+          "description": "Overall run deadline."
+        },
+        "testforge.requirementsFile": {
+          "type": "string",
+          "default": "",
+          "description": "(Placeholder, not used yet) Workspace-relative requirements document to include as evidence."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "eslint src test",
+    "typecheck": "tsc --noEmit -p .",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:extension": "npm run build && tsc -p test/extension && vscode-test",
+    "fixtures:install": "node scripts/install-fixtures.mjs",
+    "package": "npm run build && vsce package --no-dependencies -o testforge.vsix",
+    "verify": "npm run lint && npm run typecheck && npm run test:unit && npm run test:integration && npm run package && npm run package:check && npm run test:extension",
+    "package:check": "node scripts/verify-package.mjs testforge.vsix dist/extension.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "10.0.10",
+    "@types/node": "22.20.4",
+    "@types/vscode": "1.100.0",
+    "@vscode/test-cli": "0.0.15",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.0.0",
+    "esbuild": "0.28.2",
+    "eslint": "10.11.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.0",
+    "vitest": "5.0.2"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  }
+}

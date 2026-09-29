@@ -1,0 +1,23 @@
+{
+  "note": "Exact versions TestForge was built and tested with. See docs/support-matrix.md.",
+  "development": {
+    "node": "22.22.2",
+    "npm": "10.9.7",
+    "os": "Linux x64",
+    "typescript": "6.0.3",
+    "@types/vscode": "1.100.0",
+    "esbuild": "0.28.2",
+    "vitest": "5.0.2",
+    "eslint": "10.11.0",
+    "typescript-eslint": "8.71.0",
+    "zod": "4.6.5",
+    "@vscode/vsce": "4.0.0",
+    "@vscode/test-cli": "0.0.15",
+    "@vscode/test-electron": "3.1.0"
+  },
+  "target": {
+    "node": { "min": "22.12.0", "tested": "22.22.2" },
+    "vitest": { "majors": [5], "tested": "5.0.2" },
+    "typescript": { "majors": [6, 7], "tested": "7.0.2" }
+  }
+}
