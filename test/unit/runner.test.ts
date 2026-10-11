@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { childEnv, parseVitestReport } from '../../src/execution/runner';
 
@@ -32,6 +35,27 @@ describe('parseVitestReport', () => {
     expect(parseVitestReport(report(file('a.test.ts', [{ title: 't', status: 'skipped' }])), COPY, ['a.test.ts']).error).toMatch(/skipped/);
     expect(parseVitestReport('{', COPY, []).status).toBe('error');
     expect(parseVitestReport('{}', COPY, []).status).toBe('error');
+  });
+});
+
+describe('parseVitestReport path aliases', () => {
+  // Windows can name the same directory by an 8.3 short path and a long path; a symlink
+  // reproduces the "two names, one directory" situation on every platform.
+  test.skipIf(process.platform === 'win32')('maps report paths through real paths when the copy path is an alias', () => {
+    const real = fs.mkdtempSync(path.join(os.tmpdir(), 'testforge-unit-alias-'));
+    const alias = `${real}-link`;
+    try {
+      fs.mkdirSync(path.join(real, 'src'));
+      fs.writeFileSync(path.join(real, 'src/a.test.ts'), '');
+      fs.symlinkSync(real, alias);
+      const json = JSON.stringify({ numTotalTests: 1, testResults: [{ name: path.join(fs.realpathSync.native(real), 'src/a.test.ts'), status: 'passed', assertionResults: [{ title: 't', fullName: 't', status: 'passed', failureMessages: [], ancestorTitles: [] }] }] });
+      const r = parseVitestReport(json, alias, ['src/a.test.ts']);
+      expect(r.status).toBe('completed');
+      expect(r.tests[0].file).toBe('src/a.test.ts');
+    } finally {
+      fs.rmSync(alias, { force: true });
+      fs.rmSync(real, { recursive: true, force: true });
+    }
   });
 });
 

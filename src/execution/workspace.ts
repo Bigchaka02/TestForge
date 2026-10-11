@@ -15,8 +15,9 @@ export interface RunDir {
 }
 
 export function createRunDir(runId: string, base = os.tmpdir()): RunDir {
-  // realpath: Vitest reports real paths (macOS tmpdir is a symlink).
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(base, `${PREFIX}${runId}-`)));
+  // Native realpath: Vitest reports real paths. macOS tmpdir is a symlink, and Windows
+  // tmpdir can be an 8.3 short path (C:\Users\RUNNER~1\...) that only the native call expands.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(base, `${PREFIX}${runId}-`)));
   fs.writeFileSync(path.join(root, SENTINEL), JSON.stringify({ owner: 'testforge', runId, created: Date.now() }));
   const tmp = path.join(root, 'tmp');
   fs.mkdirSync(tmp);

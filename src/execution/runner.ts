@@ -158,6 +158,17 @@ interface VitestJson {
   testResults: { name: string; status: string; message?: string; assertionResults: { title: string; fullName: string; status: string; failureMessages: string[]; ancestorTitles: string[] }[] }[];
 }
 
+/** Copy-relative posix path of a file named in the report, resolving real paths when the plain form escapes the copy. */
+function reportedRel(copyDir: string, name: string): string {
+  const plain = path.relative(copyDir, name);
+  if (!plain.startsWith('..') && !path.isAbsolute(plain)) return plain.split(path.sep).join('/');
+  try {
+    return path.relative(fs.realpathSync.native(copyDir), fs.realpathSync.native(name)).split(path.sep).join('/');
+  } catch {
+    return plain.split(path.sep).join('/');
+  }
+}
+
 const TIMEOUT_RE = /Test timed out in \d+ms|Hook timed out in \d+ms/;
 
 /** Parses the pinned Vitest JSON report into per-test results. */
@@ -172,7 +183,7 @@ export function parseVitestReport(json: string, copyDir: string, expectedFiles: 
   const tests: TestResult[] = [];
   const problems: string[] = [];
   for (const file of report.testResults) {
-    const rel = path.relative(copyDir, file.name).split(path.sep).join('/');
+    const rel = reportedRel(copyDir, file.name);
     if (file.assertionResults.length === 0) problems.push(`${rel}: ${file.message || 'no tests were collected'}`);
     for (const a of file.assertionResults) {
       const msg = a.failureMessages.join('\n');
