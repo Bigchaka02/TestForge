@@ -22,8 +22,21 @@ function hashTree(dir: string): Record<string, string> {
   return out;
 }
 
-/** PIDs of live processes whose command line (or, on Linux, working directory) mentions `needle`. */
-function processesUsing(needle: string): number[] {
+/**
+ * PIDs of live processes whose command line (or, on Linux, working directory) mentions `dir`.
+ * Matches the native real path too: on Windows the temp dir can be an 8.3 short alias of it.
+ */
+function processesUsing(dir: string): number[] {
+  const names = [dir];
+  try {
+    names.push(fs.realpathSync.native(dir));
+  } catch {
+    // already removed
+  }
+  return [...new Set(names.flatMap((n) => processesMentioning(n)))];
+}
+
+function processesMentioning(needle: string): number[] {
   if (process.platform !== 'linux') return processesByCommandLine(needle);
   const pids: number[] = [];
   for (const entry of fs.readdirSync('/proc')) {

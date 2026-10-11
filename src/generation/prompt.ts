@@ -4,7 +4,8 @@ import type { MutationRecord } from '../core/types';
 import type { EvidenceFile } from './validate';
 
 export function evidenceFiles(a: TargetAnalysis): EvidenceFile[] {
-  return a.files.map((f, i) => ({ id: `F${i + 1}`, rel: f.rel, lines: f.text.split('\n') }));
+  // Split on CRLF too: Windows checkouts often use it, and a trailing \r would leak into the prompt and the evidence lines.
+  return a.files.map((f, i) => ({ id: `F${i + 1}`, rel: f.rel, lines: f.text.split(/\r?\n/) }));
 }
 
 const SCHEMA = `{

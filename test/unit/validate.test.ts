@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { LIMITS } from '../../src/core/types';
+import type { TargetAnalysis } from '../../src/analysis/analyze';
+import { evidenceFiles } from '../../src/generation/prompt';
 import { caseFingerprint, checkJsonValue, EvidenceFile, parseModelText, validatePlan } from '../../src/generation/validate';
 
 const FILES: EvidenceFile[] = [
@@ -182,5 +184,13 @@ describe('parseModelText', () => {
     expect(() => parseModelText('```json\n' + body + '\n```\nThanks!')).toThrow();
     expect(() => parseModelText(body + body)).toThrow();
     expect(() => parseModelText('"' + 'x'.repeat(LIMITS.maxResponseBytes) + '"')).toThrow(/larger than/);
+  });
+});
+
+describe('evidence files from CRLF sources', () => {
+  test('lines carry no trailing carriage return, so excerpts and prompts match on Windows checkouts', () => {
+    const a = { files: [{ rel: 'src/m.ts', text: '/** Doc line. */\r\nexport const x = 1;\r\n', hash: 'h', role: 'source' }] } as unknown as TargetAnalysis;
+    const [f] = evidenceFiles(a);
+    expect(f.lines).toEqual(['/** Doc line. */', 'export const x = 1;', '']);
   });
 });
