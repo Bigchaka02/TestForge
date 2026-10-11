@@ -28,6 +28,9 @@ export interface PipelineInput {
 const id = (file: string, title: string) => `${file}::${title}`;
 const signature = (r: SuiteRun) => r.tests.map((t) => `${id(t.file, t.title)}=${t.status}`).sort().join('\n');
 
+/** True when two runs of the same suite produced the same tests with the same outcomes (order-insensitive). */
+export const sameResults = (a: SuiteRun, b: SuiteRun) => signature(a) === signature(b);
+
 const STATUS_FOR: Record<TestForgeError['kind'], TerminalStatus> = {
   unsupported: 'unsupported',
   blocked: 'blocked',
@@ -134,7 +137,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
         if (failed.length) throw new TestForgeError('baseline-failure', `Pre-existing test failure: ${failed.map((t) => t.title).join(', ')}. Fix existing tests first.`, failed[0].message);
         runs.push(r);
       }
-      if (signature(runs[0]) !== signature(runs[1])) throw new TestForgeError('unstable', 'Existing tests gave different results on two runs; scoring stopped.');
+      if (!sameResults(runs[0], runs[1])) throw new TestForgeError('unstable', 'Existing tests gave different results on two runs; scoring stopped.');
       baselineIds = new Set(runs[0].tests.map((t) => id(t.file, t.title)));
     } else {
       report.limitations.push('No baseline tests were found next to the module, so there is no before/after comparison.');
@@ -223,7 +226,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
       partial = true;
       return report;
     }
-    if (signature(cRuns[0]) !== signature(cRuns[1])) throw new TestForgeError('unstable', 'Tests gave different results on two runs against the original code; scoring stopped.');
+    if (!sameResults(cRuns[0], cRuns[1])) throw new TestForgeError('unstable', 'Tests gave different results on two runs against the original code; scoring stopped.');
     const allIds = new Set(cRuns[0].tests.map((t) => id(t.file, t.title)));
 
     // Stage 7-8: bounded mutation set, both suites against the same mutations
