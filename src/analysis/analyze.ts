@@ -11,6 +11,7 @@ export interface ExportInfo {
   name: string;
   line: number; // 1-based line of the declaration
   eligible: boolean;
+  isAsync: boolean;
   reason?: string; // why it is not eligible
   bodyStart: number;
   bodyEnd: number;
@@ -46,7 +47,6 @@ const hasModifier = (node: ts.Node, kind: ts.SyntaxKind) =>
   ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((m) => m.kind === kind);
 
 function checkFunctionShape(fn: ts.SignatureDeclarationBase & { body?: ts.Node; asteriskToken?: ts.Node }): string | undefined {
-  if (hasModifier(fn, ts.SyntaxKind.AsyncKeyword)) return 'async functions are not supported';
   if (fn.asteriskToken) return 'generators are not supported';
   if (fn.typeParameters?.length) return 'generic functions are not supported';
   if (!fn.body) return 'function has no body';
@@ -62,7 +62,7 @@ export function findExports(sf: ts.SourceFile): ExportInfo[] {
     const isDefault = hasModifier(stmt, ts.SyntaxKind.DefaultKeyword);
     if (ts.isFunctionDeclaration(stmt) && stmt.name && stmt.body) {
       const reason = isDefault ? 'default exports are not supported' : checkFunctionShape(stmt);
-      out.push({ name: stmt.name.text, line: line(stmt), eligible: !reason, reason, bodyStart: stmt.body.getStart(sf), bodyEnd: stmt.body.end, node: stmt });
+      out.push({ name: stmt.name.text, line: line(stmt), eligible: !reason, isAsync: hasModifier(stmt, ts.SyntaxKind.AsyncKeyword), reason, bodyStart: stmt.body.getStart(sf), bodyEnd: stmt.body.end, node: stmt });
     } else if (ts.isVariableStatement(stmt)) {
       for (const decl of stmt.declarationList.declarations) {
         if (!ts.isIdentifier(decl.name) || !decl.initializer) continue;
@@ -70,10 +70,10 @@ export function findExports(sf: ts.SourceFile): ExportInfo[] {
         if (!ts.isArrowFunction(init) && !ts.isFunctionExpression(init)) continue;
         const constDecl = (stmt.declarationList.flags & ts.NodeFlags.Const) !== 0;
         const reason = !constDecl ? 'only const arrow functions are supported' : checkFunctionShape(init);
-        out.push({ name: decl.name.text, line: line(stmt), eligible: !reason, reason, bodyStart: init.body.getStart(sf), bodyEnd: init.body.end, node: init });
+        out.push({ name: decl.name.text, line: line(stmt), eligible: !reason, isAsync: hasModifier(init, ts.SyntaxKind.AsyncKeyword), reason, bodyStart: init.body.getStart(sf), bodyEnd: init.body.end, node: init });
       }
     } else if (ts.isClassDeclaration(stmt) && stmt.name) {
-      out.push({ name: stmt.name.text, line: line(stmt), eligible: false, reason: 'classes are not supported', bodyStart: 0, bodyEnd: 0, node: stmt });
+      out.push({ name: stmt.name.text, line: line(stmt), eligible: false, isAsync: false, reason: 'classes are not supported', bodyStart: 0, bodyEnd: 0, node: stmt });
     }
   }
   return out;
@@ -197,8 +197,6 @@ export function checkTestFile(sf: ts.SourceFile): string[] {
     if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && ['test', 'it', 'describe'].includes(n.expression.text)) {
       const title = n.arguments[0];
       if (!title || !(ts.isStringLiteral(title) || ts.isNoSubstitutionTemplateLiteral(title))) problems.push(`\`${n.expression.text}\` titles must be string literals`);
-      const fn = n.arguments[1];
-      if (fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) && hasModifier(fn, ts.SyntaxKind.AsyncKeyword)) problems.push('async tests are not supported');
     }
     ts.forEachChild(n, visit);
   };

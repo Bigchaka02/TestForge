@@ -121,6 +121,18 @@ describe('renderTests', () => {
     expect(checkTestFile(sf)).toEqual([]);
   });
 
+  test('async targets await the call in async tests and still pass the restrictions', () => {
+    const asrc = renderTests({ runId: 'abcd1234', exportName: 'target', importPath: './target.js', cases, demo: true, isAsync: true });
+    const asf = parse('target.testforge.abcd1234.test.ts', asrc);
+    const out = ts.transpileModule(asrc, { reportDiagnostics: true, compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
+    expect(out.diagnostics ?? []).toEqual([]);
+    expect(asrc.match(/, async \(\) => \{/g)).toHaveLength(cases.length);
+    expect(asrc).toContain('expect(await Reflect.apply(target, undefined, args)).toStrictEqual(');
+    expect(asrc).toContain('    await Reflect.apply(target, undefined, args);');
+    expect(src).not.toContain('await');
+    expect(checkTestFile(asf)).toEqual([]);
+  });
+
   test('readFingerprints round-trips', () => {
     expect(readFingerprints(src)).toEqual(cases.map((c) => c.fingerprint));
   });

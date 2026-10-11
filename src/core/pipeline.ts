@@ -193,7 +193,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     const base = path.posix.basename(report.sourceFile, '.ts');
     const genRel = path.posix.join(path.posix.dirname(report.sourceFile), `${base}.testforge.${runId}.test.ts`);
     report.generatedTestPath = genRel;
-    report.generatedTest = renderTests({ runId, exportName: a.exportName, importPath: `./${base}.js`, cases: accepted, demo: input.provider.isFake });
+    report.generatedTest = renderTests({ runId, exportName: a.exportName, importPath: `./${base}.js`, cases: accepted, demo: input.provider.isFake, isAsync: a.target.isAsync });
 
     // Stage 6: suite B (baseline + generated) against original code, twice
     stage('validating-candidates', 'Running generated tests against the original code');

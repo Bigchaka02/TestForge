@@ -23,6 +23,12 @@ const CANNED: Record<string, Canned[]> = {
     { title: 'counts down from 3', category: 'normal', args: [3], expectation: { kind: 'returns', value: 3 }, basis: 'inferred', rationale: 'Three steps to reach zero.' },
     { title: 'negative input', category: 'invalid', args: [-1], expectation: { kind: 'returns', value: 0 }, basis: 'inferred', rationale: 'Probes the documented hang.' },
   ],
+  parseScore: [
+    { title: 'score of exactly 100 is accepted', category: 'boundary', args: ['100'], expectation: { kind: 'returns', value: 100 }, basis: 'documented', excerpt: 'Parses a score between 0 and 100 from text.', rationale: 'Upper bound is inside the range.' },
+    { title: 'score of 0 is accepted', category: 'boundary', args: ['0'], expectation: { kind: 'returns', value: 0 }, basis: 'documented', excerpt: 'Parses a score between 0 and 100 from text.', rationale: 'Lower bound is inside the range.' },
+    { title: '101 rejects with RangeError', category: 'error', args: ['101'], expectation: { kind: 'throws', errorName: 'RangeError' }, basis: 'documented', excerpt: 'Rejects with RangeError when the score is outside 0..100', rationale: 'Just above the range.' },
+    { title: 'empty text rejects with TypeError', category: 'invalid', args: [''], expectation: { kind: 'throws', errorName: 'TypeError' }, basis: 'documented', excerpt: 'with TypeError when the text is not a number', rationale: 'Empty text is not a number.' },
+  ],
   joinWords: [
     { title: 'empty list gives empty string', category: 'empty', args: [[]], expectation: { kind: 'returns', value: '' }, basis: 'inferred', rationale: 'Nothing to join.' },
     { title: 'two words joined by a space', category: 'normal', args: [['a', 'b']], expectation: { kind: 'returns', value: 'a b' }, basis: 'documented', excerpt: 'Joins words with a single space.', rationale: 'Documented separator.' },

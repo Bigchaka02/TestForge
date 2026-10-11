@@ -158,6 +158,20 @@ describe('pipeline on fixtures/sample', () => {
     expect(report.cases.every((c) => c.originalOutcome === 'passed')).toBe(true);
   });
 
+  test('async: parseScore — awaited cases pass, async baseline test runs, mutants are killed', async () => {
+    const { report } = await run('score.ts', 'parseScore');
+    expect(report.failure).toBeUndefined();
+    expect(report.status).toBe('completed');
+    expect(report.baselineTests).toEqual(['src/score.test.ts']);
+    expect(report.cases.filter((c) => c.status === 'accepted').map((c) => c.originalOutcome)).toEqual(['passed', 'passed', 'passed', 'passed']);
+    expect(report.generatedTest).toContain('async () => {');
+    expect(report.generatedTest).toContain('expect(await Reflect.apply(parseScore, undefined, args))');
+    expect(report.mutations.length).toBeGreaterThan(0);
+    const { comparison } = report.scores;
+    expect(comparison).toBeDefined();
+    expect(comparison!.after).toBeGreaterThan(comparison!.before);
+  });
+
   test('joinWords — no supported mutation opportunities', async () => {
     const { report } = await run('strings.ts', 'joinWords');
     expect(report.status).toBe('completed');

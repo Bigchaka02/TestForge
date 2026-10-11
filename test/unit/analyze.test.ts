@@ -57,6 +57,7 @@ export const fnExpr = function (a: number) { return a; };
 export async function asyncFn() { return 1; }
 export const asyncArrow = async () => 1;
 export function* gen() { yield 1; }
+export async function* asyncGen() { yield 1; }
 export function generic<T>(a: T): T { return a; }
 export const genericArrow = <T,>(a: T): T => a;
 export default function def() { return 1; }
@@ -69,14 +70,14 @@ export declare function decl(): void;
   const byName = Object.fromEntries(findExports(parse('m.ts', src)).map((e) => [e.name, e]));
 
   test('eligible exports', () => {
-    for (const n of ['ok', 'arrowOk', 'fnExpr']) expect(byName[n]).toMatchObject({ eligible: true, reason: undefined });
+    for (const n of ['ok', 'arrowOk', 'fnExpr']) expect(byName[n]).toMatchObject({ eligible: true, isAsync: false, reason: undefined });
+    for (const n of ['asyncFn', 'asyncArrow']) expect(byName[n]).toMatchObject({ eligible: true, isAsync: true, reason: undefined });
     expect(byName.ok.line).toBe(2);
   });
 
   test.each([
-    ['asyncFn', /async/],
-    ['asyncArrow', /async/],
     ['gen', /generators/],
+    ['asyncGen', /generators/],
     ['generic', /generic/],
     ['genericArrow', /generic/],
     ['def', /default exports/],
@@ -178,7 +179,6 @@ describe('analyzeTarget', () => {
     ["beforeEach(() => {});\ntest('x', () => {});", /beforeEach/],
     ["test('x', () => { expect(f(1)).toMatchSnapshot(); });", /snapshots/],
     ["test('x', () => { expect(f(1)).toMatchInlineSnapshot(); });", /snapshots/],
-    ["test('x', async () => { expect(f(1)).toBe(1); });", /async tests/],
     ["const name = 'x';\ntest(name, () => {});", /titles must be string literals/],
   ])('rejects unsupported baseline tests: %s', (body, reason) => {
     const root = project({
@@ -222,8 +222,8 @@ describe('analyzeTarget', () => {
   });
 
   test('rejects ineligible or missing exports with the reason', () => {
-    const root = project({ files: { 'src/m.ts': 'export async function f() { return 1; }\n' } });
-    expect(rejection(root).message).toBe('f: async functions are not supported.');
+    const root = project({ files: { 'src/m.ts': 'export function* f() { yield 1; }\n' } });
+    expect(rejection(root).message).toBe('f: generators are not supported.');
     const root2 = project({ files: { 'src/m.ts': 'export function g() { return 1; }\n' } });
     expect(rejection(root2).message).toMatch(/No named exported function "f"/);
   });
