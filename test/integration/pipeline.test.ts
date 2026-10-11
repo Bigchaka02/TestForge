@@ -172,6 +172,59 @@ describe('pipeline on fixtures/sample', () => {
     expect(comparison!.after).toBeGreaterThan(comparison!.before);
   });
 
+  test('improvement pass: clamp — one extra request kills real survivors, equivalent ones stay', async () => {
+    const { report } = await run('clamp.ts', 'clamp', { mutationSample: 20 });
+    expect(report.status).toBe('completed');
+    expect(report.modelRequests).toBe(2);
+    const added = report.cases.filter((c) => c.round === 'improvement');
+    expect(added.map((c) => [c.title, c.status, c.originalOutcome])).toEqual([
+      ['value above max clamps to max', 'accepted', 'passed'],
+      ['max of exactly 0 is allowed', 'accepted', 'passed'],
+    ]);
+    for (const c of added) expect(report.generatedTest).toContain(`[${c.id}]`);
+    expect(report.improvement).toEqual({ survivorsBefore: 4, proposed: 2, added: 2, killed: 2 });
+    // value <= MIN -> < and value >= max -> > return the same value at the boundary: equivalent mutants.
+    expect(report.mutations.filter((m) => m.generated === 'survived').map((m) => `${m.original}->${m.replacement}`)).toEqual(['<=-><', '>=->>']);
+    expect(report.scores.generated).toEqual({ killed: 7, survived: 2, excluded: 0, rate: 7 / 9 });
+  });
+
+  test('improvement pass: a case that fails on the original code is rejected, the others are kept', async () => {
+    const good = { ...inferred('above max', [15, 10], 10) };
+    const wrong = { ...inferred('wrong expectation', [5, 0], 5) };
+    const provider = new FakeProvider((prompt) =>
+      prompt.includes('were not detected by the current tests') ? plan('clamp', [good, wrong]) : plan('clamp', [inferred('inside', [5, 10], 5)]),
+    );
+    const { report } = await run('clamp.ts', 'clamp', { provider, mutationSample: 20 });
+    expect(report.status).toBe('completed');
+    const byTitle = Object.fromEntries(report.cases.map((c) => [c.title, c]));
+    expect(byTitle['above max']).toMatchObject({ round: 'improvement', status: 'accepted', originalOutcome: 'passed' });
+    expect(byTitle['wrong expectation']).toMatchObject({ round: 'improvement', status: 'rejected', originalOutcome: 'failed' });
+    expect(byTitle['wrong expectation'].rejectReason).toMatch(/failed against the original code/);
+    expect(report.generatedTest).toContain(`[${byTitle['above max'].id}]`);
+    expect(report.generatedTest).not.toContain(`[${byTitle['wrong expectation'].id}]`);
+    expect(report.improvement!.added).toBe(1);
+    expect(report.improvement!.killed).toBeGreaterThan(0);
+    expect(report.limitations.join('\n')).toMatch(/failed against the original code and were not added/);
+  });
+
+  test('improvement pass: a provider error leaves earlier results standing; improve:false skips it', async () => {
+    let calls = 0;
+    const provider = new FakeProvider((prompt) => {
+      calls++;
+      if (prompt.includes('were not detected by the current tests')) throw new Error('quota exceeded');
+      return plan('clamp', [inferred('inside', [5, 10], 5)]);
+    });
+    const { report } = await run('clamp.ts', 'clamp', { provider });
+    expect(report.status).toBe('completed');
+    expect(calls).toBe(2);
+    expect(report.improvement).toMatchObject({ proposed: 0, added: 0, killed: 0 });
+    expect(report.limitations.join('\n')).toMatch(/improvement request failed, so earlier results stand: quota exceeded/);
+
+    const skipped = await run('clamp.ts', 'clamp', { improve: false });
+    expect(skipped.report.improvement).toBeUndefined();
+    expect(skipped.report.modelRequests).toBe(1);
+  });
+
   test('joinWords — no supported mutation opportunities', async () => {
     const { report } = await run('strings.ts', 'joinWords');
     expect(report.status).toBe('completed');

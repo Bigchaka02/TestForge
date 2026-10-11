@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { analyzeTarget, findExports, parse } from './analysis/analyze';
 import { runPipeline } from './core/pipeline';
-import { CONSENT_POLICY_VERSION, RunReport, TestForgeError } from './core/types';
+import { CONSENT_POLICY_VERSION, LIMITS, RunReport, TestForgeError } from './core/types';
 import { KeyedMutex } from './core/util';
 import { killAll } from './execution/runner';
 import { cleanupStale } from './execution/workspace';
@@ -63,7 +63,7 @@ async function ensureConsent(provider: ModelProvider, files: string[], prompt: s
   if (ctx.extensionMode === vscode.ExtensionMode.Test && process.env.TESTFORGE_TEST_CONSENT === '1') return true;
   const send = provider.isFake
     ? 'DEMO mode: nothing is sent to any model.'
-    : `TestForge will send ${files.length} file(s) to ${provider.label}:\n${files.join('\n')}\n\nOnly the selected module, its relative imports and its adjacent tests are sent.`;
+    : `TestForge will send ${files.length} file(s) to ${provider.label}:\n${files.join('\n')}\n\nOnly the selected module, its relative imports and its adjacent tests are sent, in up to ${LIMITS.maxModelRequests} requests (a correction retry and an improvement request for missed changes).`;
   const detail = `${send}\n\nIt will also run your project's TypeScript compiler and Vitest on temporary copies of these files. This runs your code as you. Temporary copies are NOT a security sandbox.`;
   for (;;) {
     const pick = await vscode.window.showWarningMessage('Allow TestForge for this workspace?', { modal: true, detail }, 'Allow', 'Show Outgoing Context');
@@ -262,7 +262,7 @@ async function showMutation(id: string): Promise<void> {
   }
   const left = previewUri(`/${run.report.runId}/${m.id}/original/${m.file}`, text);
   const right = previewUri(`/${run.report.runId}/${m.id}/mutated/${m.file}`, applyMutation(text, m));
-  await vscode.commands.executeCommand('vscode.diff', left, right, `Mutation line ${m.line}: ${m.original} → ${m.replacement}`, { selection: new vscode.Range(m.line - 1, 0, m.line - 1, 0) });
+  await vscode.commands.executeCommand('vscode.diff', left, right, `Mutation line ${m.line}: ${m.original} → ${m.replacement || "(removed)"}`, { selection: new vscode.Range(m.line - 1, 0, m.line - 1, 0) });
 }
 
 // ---------- apply / discard / history ----------

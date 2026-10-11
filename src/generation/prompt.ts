@@ -38,7 +38,7 @@ export function buildPrompt(a: TargetAnalysis, files: EvidenceFile[], opts: { ma
   if (opts.existingTitles.length) parts.push(`Existing tests already cover: ${opts.existingTitles.map((t) => JSON.stringify(t)).join(', ')}`);
   if (opts.survivors?.length) {
     parts.push('These hypothetical code changes were not detected by the current tests; propose cases that would detect them if the documentation supports it:');
-    for (const m of opts.survivors) parts.push(`- line ${m.line}: \`${m.original}\` -> \`${m.replacement}\``);
+    for (const m of opts.survivors) parts.push(`- line ${m.line}: \`${m.original}\` -> ${m.replacement ? `\`${m.replacement}\`` : '(removed)'}`);
   }
   for (const f of files) {
     parts.push(`\n=== ${f.id}: ${f.rel} ===`);

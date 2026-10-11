@@ -35,6 +35,14 @@ const CANNED: Record<string, Canned[]> = {
   ],
 };
 
+/** Canned answers to the improvement request (surviving mutants listed in the prompt). */
+const IMPROVE: Record<string, Canned[]> = {
+  clamp: [
+    { title: 'value above max clamps to max', category: 'boundary', args: [15, 10], expectation: { kind: 'returns', value: 10 }, basis: 'documented', excerpt: 'Clamp value into [MIN, max].', rationale: 'Upper clamp was never exercised.' },
+    { title: 'max of exactly 0 is allowed', category: 'boundary', args: [5, 0], expectation: { kind: 'returns', value: 0 }, basis: 'documented', excerpt: 'Throws RangeError when max is below MIN.', rationale: 'max equal to MIN is not below it, so no throw.' },
+  ],
+};
+
 /** Finds an excerpt in the numbered context blocks of the prompt. */
 function locate(prompt: string, excerpt: string): { fileId: string; startLine: number; endLine: number; excerpt: string } | undefined {
   let fileId = '';
@@ -60,7 +68,8 @@ export class FakeProvider implements ModelProvider {
     if (this.override) return this.override(prompt, history.length);
     const first = history.length ? history[0].text : prompt;
     const exportName = /exported TypeScript function `([^`]+)`/.exec(first)?.[1] ?? '';
-    const canned = CANNED[exportName] ?? [];
+    const improving = first.includes('were not detected by the current tests');
+    const canned = (improving ? IMPROVE : CANNED)[exportName] ?? [];
     const cases = canned.map(({ excerpt, ...c }) => {
       const ref = excerpt ? locate(first, excerpt) : undefined;
       return { ...c, basis: ref ? c.basis : 'inferred', evidence: ref ? [ref] : [] };

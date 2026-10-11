@@ -71,7 +71,7 @@ export class ResultsProvider implements vscode.TreeDataProvider<Node> {
       const evFile = ev ? r.contextFiles[Number(ev.fileId.slice(1)) - 1] : undefined;
       return {
         label: `[${caseWord(c)}] ${c.title}`,
-        description: `${c.basis} · ${c.category}`,
+        description: `${c.basis} · ${c.category}${c.round === 'improvement' ? ' · improvement pass' : ''}`,
         tooltip: [c.rationale, ...c.evidence.map((e) => `${e.fileId} ${e.startLine}-${e.endLine}: ${e.excerpt}`), c.rejectReason, c.failureMessage].filter(Boolean).join('\n'),
         icon: caseWord(c) === 'PASS' ? 'pass' : 'circle-slash',
         command: evFile && ev ? this.open(evFile, ev.startLine) : undefined,
@@ -87,13 +87,17 @@ export class ResultsProvider implements vscode.TreeDataProvider<Node> {
       { label: `Existing tests: ${fmtScore(s.baseline)}` },
       { label: `With generated tests: ${fmtScore(s.generated)}` },
     ];
+    if (r.improvement) {
+      const i = r.improvement;
+      testNodes.push({ label: `Improvement pass: ${i.killed}/${i.survivorsBefore} missed change(s) now detected`, description: `${i.added} case(s) added of ${i.proposed} proposed` });
+    }
     if (s.comparison) {
       const c = s.comparison;
       testNodes.push({ label: `Shared comparison: ${c.before}/${c.denominator} → ${c.after}/${c.denominator} (${c.after - c.before >= 0 ? '+' : ''}${c.after - c.before})`, description: c.excluded ? `${c.excluded} excluded` : undefined });
     }
 
     const mutNodes: Node[] = r.mutations.map((m: MutationRecord) => ({
-      label: `Line ${m.line}: ${m.original} → ${m.replacement}`,
+      label: `Line ${m.line}: ${m.original} → ${m.replacement || '(removed)'}`,
       description: `${m.baseline ? `existing: ${WORD[m.baseline]} · ` : ''}with generated: ${m.generated ? WORD[m.generated] : 'NOT RUN'}`,
       tooltip: [m.family, m.detectingTests.length ? `Detected by: ${m.detectingTests.join(', ')}` : '', m.note ?? ''].filter(Boolean).join('\n'),
       icon: m.generated === 'killed' ? 'shield' : 'debug-breakpoint-unverified',
