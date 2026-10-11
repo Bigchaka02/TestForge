@@ -1,5 +1,6 @@
 // Full pipeline runs against the real fixtures/sample project: real tsc and Vitest
 // processes, a deterministic fake provider, temp run directories.
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -21,8 +22,9 @@ function hashTree(dir: string): Record<string, string> {
   return out;
 }
 
-/** PIDs of live processes whose command line or working directory mentions `needle`. */
+/** PIDs of live processes whose command line (or, on Linux, working directory) mentions `needle`. */
 function processesUsing(needle: string): number[] {
+  if (process.platform !== 'linux') return processesByCommandLine(needle);
   const pids: number[] = [];
   for (const entry of fs.readdirSync('/proc')) {
     if (!/^\d+$/.test(entry) || Number(entry) === process.pid) continue;
@@ -38,6 +40,20 @@ function processesUsing(needle: string): number[] {
     } catch {
       // process exited
     }
+  }
+  return pids;
+}
+
+/** macOS and Windows have no /proc: list command lines with ps or CIM instead. */
+function processesByCommandLine(needle: string): number[] {
+  const out =
+    process.platform === 'win32'
+      ? execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" }'], { encoding: 'utf8' })
+      : execFileSync('ps', ['-axww', '-o', 'pid=,args='], { encoding: 'utf8' });
+  const pids: number[] = [];
+  for (const line of out.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (m && Number(m[1]) !== process.pid && m[2].includes(needle)) pids.push(Number(m[1]));
   }
   return pids;
 }
