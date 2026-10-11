@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { findExports, parse } from '../../src/analysis/analyze';
 import type { MutationOutcome, MutationRecord, SuiteRun, TestResult } from '../../src/core/types';
-import { applyMutation, classify, compare, enumerateMutations, score } from '../../src/mutation/mutate';
+import { applyMutation, classify, compare, enumerateMutations, sampleMutations, score } from '../../src/mutation/mutate';
 
 const SOURCE = `// a >= b in a comment
 export function other(x: number): boolean {
@@ -40,9 +40,14 @@ describe('enumerateMutations', () => {
     const m = muts('target');
     expect(m.map((x) => [x.family, x.original, x.replacement, x.line])).toEqual([
       ['relational-boundary', '>', '>=', 9], // inside the template substitution: real code
+      ['if-condition', 'a >= b && a !== 0', 'false', 17],
+      ['if-condition', 'a >= b && a !== 0', 'true', 17],
       ['relational-boundary', '>=', '>', 17],
+      ['logical', '&&', '||', 17],
       ['strict-equality', '!==', '===', 17],
       ['boolean-return', 'true', 'false', 18],
+      ['if-condition', "s === 'x'", 'false', 21],
+      ['if-condition', "s === 'x'", 'true', 21],
       ['strict-equality', '===', '!==', 21],
       ['boolean-return', 'false', 'true', 21],
       ['relational-boundary', '<', '<=', 22],
@@ -57,7 +62,7 @@ describe('enumerateMutations', () => {
   });
 
   test('handles expression-bodied arrows', () => {
-    expect(muts('arrow').map((x) => `${x.original}->${x.replacement}`)).toEqual(['<=-><']);
+    expect(muts('arrow').map((x) => `${x.original}->${x.replacement}`)).toEqual(['<=-><', '3->2', '3->4']);
     expect(muts('alwaysTrue').map((x) => `${x.original}->${x.replacement}`)).toEqual(['true->false']);
   });
 
@@ -80,6 +85,44 @@ describe('enumerateMutations', () => {
   test('sorted by position', () => {
     const m = muts('target');
     expect(m.map((x) => x.start)).toEqual([...m.map((x) => x.start)].sort((p, q) => p - q));
+  });
+});
+
+describe('new operator families', () => {
+  const SRC = `export function f(a: number, b: number, s: string, ok: boolean): number {
+  const label = s + 'x';
+  const t = \`\${s}\` + s;
+  if (!ok || a % 2 === 0) return a * b - 1;
+  return a / b + 0 + (a > 10 ? 1 : 0);
+}
+`;
+  const f = parse('src/f.ts', SRC);
+  const all = enumerateMutations(f, findExports(f)[0].node, 'src/f.ts', 'h');
+  const pick = (family: string) => all.filter((x) => x.family === family).map((x) => `${x.original}->${x.replacement}`);
+
+  test('arithmetic, skipping string concatenation', () => {
+    expect(pick('arithmetic')).toEqual(['%->*', '*->/', '-->+', '/->*', '+->-', '+->-']);
+  });
+
+  test('logical, negation removal and if-condition', () => {
+    expect(pick('logical')).toEqual(['||->&&']);
+    expect(pick('negation-removal')).toEqual(['!->']);
+    expect(pick('if-condition')).toEqual(['!ok || a % 2 === 0->false', '!ok || a % 2 === 0->true']);
+  });
+
+  test('literal boundary only for integer bounds in comparisons', () => {
+    expect(pick('literal-boundary')).toEqual(['10->11', '10->9']);
+  });
+
+  test('every mutation applies cleanly to pristine text', () => {
+    for (const m of all) expect(applyMutation(SRC, m)).not.toBe(SRC);
+  });
+});
+
+describe('sampleMutations', () => {
+  test('keeps everything under the cap and spreads evenly over it', () => {
+    expect(sampleMutations([1, 2, 3], 5)).toEqual([1, 2, 3]);
+    expect(sampleMutations([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 4)).toEqual([0, 2, 5, 7]);
   });
 });
 

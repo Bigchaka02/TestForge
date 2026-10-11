@@ -139,7 +139,7 @@ export type MutationOutcome = 'killed' | 'survived' | 'invalid' | 'timeout' | 'e
 
 export interface Mutation {
   id: string;
-  family: 'relational-boundary' | 'strict-equality' | 'boolean-return';
+  family: 'relational-boundary' | 'literal-boundary' | 'strict-equality' | 'boolean-return' | 'arithmetic' | 'logical' | 'negation-removal' | 'if-condition';
   file: string; // relative path
   start: number;
   end: number;

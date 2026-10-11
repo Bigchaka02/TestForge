@@ -1,4 +1,4 @@
-// Small AST mutation engine: three operator families, inside the selected function
+// Small AST mutation engine: eight operator families, inside the selected function
 // body only, one mutation at a time on pristine text.
 import ts from 'typescript';
 import { Mutation, MutationOutcome, MutationRecord, SuiteRun, SuiteScore, Comparison } from '../core/types';
@@ -15,27 +15,60 @@ const EQUALITY: Partial<Record<ts.SyntaxKind, string>> = {
   [ts.SyntaxKind.ExclamationEqualsEqualsToken]: '===',
 };
 
+const ARITHMETIC: Partial<Record<ts.SyntaxKind, string>> = {
+  [ts.SyntaxKind.PlusToken]: '-',
+  [ts.SyntaxKind.MinusToken]: '+',
+  [ts.SyntaxKind.AsteriskToken]: '/',
+  [ts.SyntaxKind.SlashToken]: '*',
+  [ts.SyntaxKind.PercentToken]: '*',
+};
+const LOGICAL: Partial<Record<ts.SyntaxKind, string>> = {
+  [ts.SyntaxKind.AmpersandAmpersandToken]: '||',
+  [ts.SyntaxKind.BarBarToken]: '&&',
+};
+const isStringish = (n: ts.Node) => ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n);
+
 const isNestedFunction = (n: ts.Node) =>
   ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n) || ts.isMethodDeclaration(n) || ts.isClassLike(n) || ts.isAccessor(n);
 
 /** Enumerates mutations inside `fn` (an exported function or arrow), sorted by position. */
 export function enumerateMutations(sf: ts.SourceFile, fn: ts.Node, rel: string, fileHash: string): Mutation[] {
   const out: Mutation[] = [];
-  const add = (family: Mutation['family'], node: ts.Node, replacement: string) => {
-    const start = node.getStart(sf);
-    const end = node.getEnd();
+  const addSpan = (family: Mutation['family'], start: number, end: number, replacement: string) => {
     const original = sf.text.slice(start, end);
     const pos = sf.getLineAndCharacterOfPosition(start);
     const id = `m-${sha256(`${fileHash}:${start}:${end}:${original}:${replacement}`).slice(0, 10)}`;
     out.push({ id, family, file: rel, start, end, line: pos.line + 1, column: pos.character + 1, original, replacement });
   };
+  const add = (family: Mutation['family'], node: ts.Node, replacement: string) => addSpan(family, node.getStart(sf), node.getEnd(), replacement);
   const visit = (n: ts.Node) => {
     if (n !== fn && isNestedFunction(n)) return; // skip nested function bodies
     if (ts.isTypeNode(n)) return; // no mutations inside types
     if (ts.isBinaryExpression(n)) {
       const k = n.operatorToken.kind;
-      if (RELATIONAL[k]) add('relational-boundary', n.operatorToken, RELATIONAL[k]!);
+      if (RELATIONAL[k]) {
+        add('relational-boundary', n.operatorToken, RELATIONAL[k]!);
+        // Numeric bounds in a comparison: off-by-one in either direction.
+        for (const side of [n.left, n.right]) {
+          if (ts.isNumericLiteral(side) && /^\d+$/.test(side.text) && side.getText(sf) === side.text) {
+            const v = Number(side.text);
+            add('literal-boundary', side, String(v + 1));
+            if (v > 0) add('literal-boundary', side, String(v - 1));
+          }
+        }
+      }
       if (EQUALITY[k]) add('strict-equality', n.operatorToken, EQUALITY[k]!);
+      // `+` on strings would only produce a compile error, so string concatenation is skipped.
+      if (ARITHMETIC[k] && !(k === ts.SyntaxKind.PlusToken && (isStringish(n.left) || isStringish(n.right)))) add('arithmetic', n.operatorToken, ARITHMETIC[k]!);
+      if (LOGICAL[k]) add('logical', n.operatorToken, LOGICAL[k]!);
+    }
+    if (ts.isPrefixUnaryExpression(n) && n.operator === ts.SyntaxKind.ExclamationToken) {
+      const start = n.getStart(sf);
+      addSpan('negation-removal', start, start + 1, '');
+    }
+    if (ts.isIfStatement(n) && n.expression.kind !== ts.SyntaxKind.TrueKeyword && n.expression.kind !== ts.SyntaxKind.FalseKeyword) {
+      add('if-condition', n.expression, 'true');
+      add('if-condition', n.expression, 'false');
     }
     if (ts.isReturnStatement(n) && n.expression) {
       if (n.expression.kind === ts.SyntaxKind.TrueKeyword) add('boolean-return', n.expression, 'false');
@@ -51,6 +84,12 @@ export function enumerateMutations(sf: ts.SourceFile, fn: ts.Node, rel: string, 
   const body = (fn as ts.FunctionLikeDeclaration).body;
   if (body) visit(body);
   return out.sort((a, b) => a.start - b.start || a.replacement.localeCompare(b.replacement));
+}
+
+/** Deterministic, evenly spread sample of at most `n` mutations (keeps source order). */
+export function sampleMutations<T>(all: T[], n: number): T[] {
+  if (all.length <= n) return all;
+  return Array.from({ length: n }, (_, i) => all[Math.floor((i * all.length) / n)]);
 }
 
 /** Applies one mutation to pristine text after verifying the original token. */

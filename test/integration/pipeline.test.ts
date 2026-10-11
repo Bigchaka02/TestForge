@@ -98,9 +98,12 @@ describe('pipeline on fixtures/sample', () => {
     expect(m!.baseline).toBe('survived');
     expect(m!.generated).toBe('killed');
     expect(m!.detectingTests).toEqual([`[${accepted[0].id}] age 18 is eligible (boundary)`]);
-    expect(report.scores.baseline).toEqual({ killed: 0, survived: report.mutations.length, excluded: 0, rate: 0 });
-    expect(report.scores.generated?.killed).toBe(report.mutations.length);
-    expect(report.scores.comparison).toEqual({ denominator: report.mutations.length, before: 0, after: report.mutations.length, excluded: 0 });
+    // Mutations: >= -> >, and the bound 18 -> 17 / 18 -> 19. The existing tests (17, 25) only catch 18 -> 17.
+    expect(report.mutations.map((x) => `${x.original}->${x.replacement}`)).toEqual(['>=->>', '18->17', '18->19']);
+    expect(report.mutations.find((x) => x.replacement === '17')!.baseline).toBe('killed');
+    expect(report.scores.baseline).toEqual({ killed: 1, survived: 2, excluded: 0, rate: 1 / 3 });
+    expect(report.scores.generated).toEqual({ killed: 3, survived: 0, excluded: 0, rate: 1 });
+    expect(report.scores.comparison).toEqual({ denominator: 3, before: 1, after: 3, excluded: 0 });
     expect(report.generatedTestPath).toBe(`src/age.testforge.${report.runId}.test.ts`);
     expect(report.generatedTest).toContain("import { isEligible } from \"./age.js\";");
     expect(report.inputHashes['src/age.ts']).toBe(before['age.ts']);

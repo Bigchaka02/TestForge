@@ -7,7 +7,7 @@ import { readFingerprints, renderTests } from '../generation/render';
 import { parseModelText, validatePlan, ValidationResult } from '../generation/validate';
 import { resolveNode, resolveTools, runVitest, typeCheck } from '../execution/runner';
 import { createCopy, createRunDir, removeRunDir, RunDir, writeConfigs, writeFile } from '../execution/workspace';
-import { applyMutation, classify, compare, enumerateMutations, score } from '../mutation/mutate';
+import { applyMutation, classify, compare, enumerateMutations, sampleMutations, score } from '../mutation/mutate';
 import type { ModelProvider } from '../providers/provider';
 import { LIMITS, RunReport, Stage, SuiteRun, TerminalStatus, TestForgeError } from './types';
 import { newRunId, sha256 } from './util';
@@ -237,7 +237,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     const n = Math.max(1, Math.min(input.mutationSample ?? LIMITS.defaultMutations, LIMITS.maxMutations));
     if (!all.length) report.limitations.push('No supported mutation opportunities.');
     else report.limitations.push(`Mutation results cover a sample of ${Math.min(n, all.length)} of ${all.length} supported mutations (hypothetical faults, not confirmed bugs).`);
-    report.mutations = all.slice(0, n).map((m) => ({ ...m, detectingTests: [] }));
+    report.mutations = sampleMutations(all, n).map((m) => ({ ...m, detectingTests: [] }));
     for (const [i, m] of report.mutations.entries()) {
       if (sig.aborted) {
         m.baseline = baselineIds.size ? 'not-run' : undefined;
