@@ -1,17 +1,11 @@
-// Native TreeView with five groups. Status is always spelled out in text, never color only.
+// Native TreeView with five groups (an audit has no Cases). Status is always spelled out in text, never color only.
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import type { CaseRecord, MutationOutcome, MutationRecord, SuiteScore } from '../core/types';
+import type { MutationRecord } from '../core/types';
 import type { StoredRun } from '../storage/apply';
+import { caseWord, fmtScore, WORD } from './summary';
 
 type Node = { label: string; description?: string; tooltip?: string; icon?: string; children?: Node[]; command?: vscode.Command };
-
-const WORD: Record<MutationOutcome, string> = { killed: 'DETECTED', survived: 'MISSED', invalid: 'INVALID', timeout: 'TIMEOUT', error: 'ERROR', 'not-run': 'NOT RUN' };
-
-const caseWord = (c: CaseRecord) =>
-  c.status !== 'accepted' ? c.status.toUpperCase() : c.originalOutcome === 'passed' ? 'PASS' : c.originalOutcome === 'failed' ? 'FAIL' : c.originalOutcome === 'timeout' ? 'TIMEOUT' : 'NOT RUN';
-
-const fmtScore = (s?: SuiteScore) => (!s ? 'n/a' : s.rate === null ? `N/A (0 valid, ${s.excluded} excluded)` : `${s.killed}/${s.killed + s.survived} detected${s.excluded ? `, ${s.excluded} excluded` : ''}`);
 
 export class ResultsProvider implements vscode.TreeDataProvider<Node> {
   private readonly emitter = new vscode.EventEmitter<Node | undefined>();
@@ -51,9 +45,11 @@ export class ResultsProvider implements vscode.TreeDataProvider<Node> {
 
   private build(run: StoredRun): Node[] {
     const r = run.report;
+    // An audit checks the existing tests only: no model, no cases, no generated file.
+    const audit = r.mode === 'audit';
     const elapsed = r.finishedAt ? `${((Date.parse(r.finishedAt) - Date.parse(r.startedAt)) / 1000).toFixed(1)}s` : 'running';
     const runNodes: Node[] = [
-      { label: `Status: ${r.status.toUpperCase()}`, description: r.demo ? 'DEMO (fake model)' : undefined, icon: r.status === 'completed' ? 'pass' : 'warning' },
+      { label: `Status: ${r.status.toUpperCase()}`, description: r.demo ? 'DEMO (fake model)' : audit ? 'AUDIT (no AI)' : undefined, icon: r.status === 'completed' ? 'pass' : 'warning' },
       { label: `Function: ${r.exportName}`, description: r.sourceFile, command: this.open(r.sourceFile, 1) },
       { label: `Model: ${r.model}`, description: `${r.modelRequests} request(s)` },
       { label: `Elapsed: ${elapsed}`, description: `run ${r.runId}` },
@@ -61,7 +57,7 @@ export class ResultsProvider implements vscode.TreeDataProvider<Node> {
       { label: `Context sent: ${r.contextFiles.length} file(s)`, tooltip: r.contextFiles.join('\n') },
     ];
     if (r.failure) runNodes.push({ label: `Stopped: ${r.failure.message}`, tooltip: r.failure.detail, icon: 'error' });
-    if (this.stale.length) runNodes.push({ label: 'STALE: Apply is disabled', description: this.stale.join('; '), tooltip: this.stale.join('\n'), icon: 'history' });
+    if (this.stale.length) runNodes.push({ label: audit ? 'STALE: files changed since this audit' : 'STALE: Apply is disabled', description: this.stale.join('; '), tooltip: this.stale.join('\n'), icon: 'history' });
     if (run.appliedHash) runNodes.push({ label: `Applied: ${r.generatedTestPath}`, icon: 'check' });
     if (r.generatedTest) runNodes.push({ label: 'Preview generated test file', icon: 'eye', command: { title: 'Preview', command: 'testforge.previewTests' } });
     if (r.cleanup !== 'done') runNodes.push({ label: `Cleanup: ${r.cleanup.toUpperCase()}`, icon: 'warning' });
@@ -81,12 +77,9 @@ export class ResultsProvider implements vscode.TreeDataProvider<Node> {
     for (const q of r.unresolvedQuestions) caseNodes.push({ label: `Question: ${q}`, icon: 'question' });
 
     const s = r.scores;
-    const testNodes: Node[] = [
-      { label: `Baseline runs: ${r.baselineRuns.join(', ') || 'none (no existing tests)'}`, tooltip: r.baselineTests.join('\n') },
-      { label: `Candidate runs: ${r.candidateRuns.join(', ') || 'not run'}` },
-      { label: `Existing tests: ${fmtScore(s.baseline)}` },
-      { label: `With generated tests: ${fmtScore(s.generated)}` },
-    ];
+    const testNodes: Node[] = [{ label: `Baseline runs: ${r.baselineRuns.join(', ') || 'none (no existing tests)'}`, tooltip: r.baselineTests.join('\n') }];
+    if (audit) testNodes.push({ label: `Existing tests: ${fmtScore(s.baseline)}` });
+    else testNodes.push({ label: `Candidate runs: ${r.candidateRuns.join(', ') || 'not run'}` }, { label: `Existing tests: ${fmtScore(s.baseline)}` }, { label: `With generated tests: ${fmtScore(s.generated)}` });
     if (r.improvement) {
       const i = r.improvement;
       testNodes.push({ label: `Improvement pass: ${i.killed}/${i.survivorsBefore} missed change(s) now detected`, description: `${i.added} case(s) added of ${i.proposed} proposed` });
@@ -98,16 +91,16 @@ export class ResultsProvider implements vscode.TreeDataProvider<Node> {
 
     const mutNodes: Node[] = r.mutations.map((m: MutationRecord) => ({
       label: `Line ${m.line}: ${m.original} → ${m.replacement || '(removed)'}`,
-      description: `${m.baseline ? `existing: ${WORD[m.baseline]} · ` : ''}with generated: ${m.generated ? WORD[m.generated] : 'NOT RUN'}`,
+      description: audit ? `existing: ${m.baseline ? WORD[m.baseline] : 'NOT RUN'}` : `${m.baseline ? `existing: ${WORD[m.baseline]} · ` : ''}with generated: ${m.generated ? WORD[m.generated] : 'NOT RUN'}`,
       tooltip: [m.family, m.detectingTests.length ? `Detected by: ${m.detectingTests.join(', ')}` : '', m.note ?? ''].filter(Boolean).join('\n'),
-      icon: m.generated === 'killed' ? 'shield' : 'debug-breakpoint-unverified',
+      icon: (audit ? m.baseline : m.generated) === 'killed' ? 'shield' : 'debug-breakpoint-unverified',
       command: { title: 'Show mutation', command: 'testforge.showMutation', arguments: [m.id] },
     }));
     if (!mutNodes.length) mutNodes.push({ label: 'No mutation results' });
 
     return [
       { label: 'Run', children: runNodes },
-      { label: 'Cases', children: caseNodes.length ? caseNodes : [{ label: 'No cases' }] },
+      ...(audit ? [] : [{ label: 'Cases', children: caseNodes.length ? caseNodes : [{ label: 'No cases' }] }]),
       { label: 'Test Results', children: testNodes },
       { label: 'Mutation Checks', children: mutNodes },
       { label: 'Limitations', children: r.limitations.map((l) => ({ label: l, tooltip: l })) },

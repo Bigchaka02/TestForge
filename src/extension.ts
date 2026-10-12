@@ -1,10 +1,10 @@
-// VS Code adapter: commands, CodeLens, consent, progress, results view, preview and apply.
+// VS Code adapter: commands, CodeLens, chat tools, consent, progress, results view, preview and apply.
 // Product logic lives in vscode-free modules; this file never invents results.
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
-import { analyzeTarget, findExports, parse } from './analysis/analyze';
-import { runPipeline } from './core/pipeline';
+import { adjacentTestNames, findExports, parse, TargetAnalysis } from './analysis/analyze';
+import { preflight, RunMode, runPipeline } from './core/pipeline';
 import { CONSENT_POLICY_VERSION, LIMITS, RunReport, TestForgeError } from './core/types';
 import { KeyedMutex } from './core/util';
 import { killAll } from './execution/runner';
@@ -16,6 +16,7 @@ import type { ModelProvider } from './providers/provider';
 import { modelLabel, VsCodeLmProvider } from './providers/vscodeLm';
 import { applyGenerated, pruneHistory, staleReasons, StoredRun } from './storage/apply';
 import { ResultsProvider } from './ui/results';
+import { fmtScore, summarize } from './ui/summary';
 
 const HISTORY_KEY = 'testforge.history';
 const MODEL_KEY = 'testforge.modelId';
@@ -56,19 +57,24 @@ function requireTrust(): boolean {
   return false;
 }
 
-async function ensureConsent(provider: ModelProvider, files: string[], prompt: string): Promise<boolean> {
-  const key = `testforge.consent.v${CONSENT_POLICY_VERSION}.${provider.isFake ? 'execution-only' : provider.label}`;
+/** Extension-host tests only (set in .vscode-test.mjs); never set for users. */
+const testConsent = () => ctx.extensionMode === vscode.ExtensionMode.Test && process.env.TESTFORGE_TEST_CONSENT === '1';
+
+/** `provider` is undefined for an audit. Audits and demo runs send nothing, so they share one execution-only consent. */
+async function ensureConsent(provider: ModelProvider | undefined, files: string[], prompt: string): Promise<boolean> {
+  const sends = provider && !provider.isFake ? provider : undefined;
+  const key = `testforge.consent.v${CONSENT_POLICY_VERSION}.${sends ? sends.label : 'execution-only'}`;
   if (ctx.workspaceState.get<boolean>(key)) return true;
-  // Extension-host tests only (set in .vscode-test.mjs); never set for users.
-  if (ctx.extensionMode === vscode.ExtensionMode.Test && process.env.TESTFORGE_TEST_CONSENT === '1') return true;
-  const send = provider.isFake
-    ? 'DEMO mode: nothing is sent to any model.'
-    : `TestForge will send ${files.length} file(s) to ${provider.label}:\n${files.join('\n')}\n\nOnly the selected module, its relative imports and its adjacent tests are sent, in up to ${LIMITS.maxModelRequests} requests (a correction retry and an improvement request for missed changes).`;
+  if (testConsent()) return true;
+  const mode = provider ? 'DEMO' : 'Audit';
+  const send = !sends
+    ? `${mode} mode: nothing is sent to any model. This permission covers both Run Demo and Audit Existing Tests.\n\nTestForge uses these files:\n${files.join('\n')}`
+    : `TestForge will send ${files.length} file(s) to ${sends.label}:\n${files.join('\n')}\n\nOnly the selected module, its relative imports and its adjacent tests are sent, in up to ${LIMITS.maxModelRequests} requests (a correction retry and an improvement request for missed changes).`;
   const detail = `${send}\n\nIt will also run your project's TypeScript compiler and Vitest on temporary copies of these files. This runs your code as you. Temporary copies are NOT a security sandbox.`;
   for (;;) {
     const pick = await vscode.window.showWarningMessage('Allow TestForge for this workspace?', { modal: true, detail }, 'Allow', 'Show Outgoing Context');
     if (pick === 'Show Outgoing Context') {
-      await openPreview(`/context/${Date.now()}.txt`, provider.isFake ? '(DEMO mode: nothing is sent.)' : prompt);
+      await openPreview(`/context/${Date.now()}.txt`, sends ? prompt : `(${mode} mode: nothing is sent.)`);
       continue;
     }
     if (pick !== 'Allow') return false;
@@ -94,13 +100,14 @@ async function pickModel(): Promise<vscode.LanguageModelChat | undefined> {
   return pick.model;
 }
 
-async function currentModel(): Promise<vscode.LanguageModelChat | undefined> {
+/** The selected model, else a pick (commands) or, with `pick` false, the first available model without UI (chat tools). */
+async function currentModel(pick = true): Promise<vscode.LanguageModelChat | undefined> {
   const id = ctx.globalState.get<string>(MODEL_KEY);
   if (id) {
     const [m] = await vscode.lm.selectChatModels({ id });
     if (m) return m;
   }
-  return pickModel();
+  return pick ? pickModel() : (await vscode.lm.selectChatModels())[0];
 }
 
 // ---------- target selection ----------
@@ -130,9 +137,62 @@ async function resolveTarget(uri?: vscode.Uri, exportName?: string): Promise<{ u
   return pick && { uri: doc.uri, exportName: pick.label };
 }
 
+// ---------- shared run ----------
+
+/** Open documents with unsaved changes among the files a run would copy. */
+function unsaved(root: string, analysis: TargetAnalysis): vscode.TextDocument[] {
+  const relevant = new Set(analysis.files.map((f) => path.join(root, f.rel)));
+  return vscode.workspace.textDocuments.filter((d) => d.isDirty && relevant.has(d.uri.fsPath));
+}
+
+/**
+ * Runs the pipeline with progress, cancel and logging, then saves the report and shows it in the
+ * Results view. Shared by the commands and the chat tools; the caller holds the workspace mutex.
+ */
+async function execute(root: string, target: { uri: vscode.Uri; exportName: string }, how: RunMode, token?: vscode.CancellationToken): Promise<RunReport> {
+  const cfg = vscode.workspace.getConfiguration('testforge');
+  const abort = new AbortController();
+  active.set(root, abort);
+  const onToken = token?.onCancellationRequested(() => abort.abort());
+  if (token?.isCancellationRequested) abort.abort();
+  const tag = how.mode === 'audit' ? 'AUDIT ' : how.provider.isFake ? 'DEMO ' : '';
+  output.appendLine(`[${new Date().toISOString()}] ${tag}run for ${target.exportName} in ${vscode.workspace.asRelativePath(target.uri)} using ${how.provider?.label ?? 'no model'}${token ? ' (chat tool)' : ''}`);
+  try {
+    const report = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `TestForge${how.mode === 'audit' ? ' (audit)' : how.provider.isFake ? ' (DEMO)' : ''}: ${target.exportName}`, cancellable: true },
+      (progress, progressToken) => {
+        progressToken.onCancellationRequested(() => abort.abort());
+        return runPipeline({
+          root,
+          sourceAbs: target.uri.fsPath,
+          exportName: target.exportName,
+          ...how,
+          nodePath: cfg.get<string>('nodePath') || undefined,
+          mutationSample: cfg.get<number>('mutationSample'),
+          globalDeadlineMs: (cfg.get<number>('globalDeadlineSeconds') ?? 180) * 1000,
+          signal: abort.signal,
+          onStage: (stage, message) => {
+            progress.report({ message });
+            output.appendLine(`  ${stage}: ${message}`);
+          },
+        });
+      },
+    );
+    const run: StoredRun = { report, root, savedAt: Date.now() };
+    await saveRun(run);
+    showRun(run);
+    output.appendLine(`  result: ${report.status}${report.failure ? ` (${report.failure.kind}: ${report.failure.message})` : ''}`);
+    return report;
+  } finally {
+    onToken?.dispose();
+    active.delete(root);
+  }
+}
+
 // ---------- main command ----------
 
-async function generate(demo: boolean, uri?: vscode.Uri, exportName?: string): Promise<RunReport | undefined> {
+/** Command path for Generate & Verify, Run Demo (fake model) and Audit Existing Tests (no model). */
+async function generate(mode: 'generate' | 'demo' | 'audit', uri?: vscode.Uri, exportName?: string): Promise<RunReport | undefined> {
   if (!requireTrust()) return undefined;
   const target = await resolveTarget(uri, exportName);
   if (!target) return undefined;
@@ -150,9 +210,10 @@ async function generate(demo: boolean, uri?: vscode.Uri, exportName?: string): P
   }
   try {
     // Preflight before any model request or process: support matrix and dirty files.
+    const pipelineMode = mode === 'audit' ? 'audit' : 'generate';
     let analysis;
     try {
-      analysis = analyzeTarget(root, target.uri.fsPath, target.exportName);
+      analysis = preflight(root, target.uri.fsPath, target.exportName, pipelineMode);
     } catch (e) {
       if (e instanceof TestForgeError) {
         void vscode.window.showErrorMessage(`TestForge cannot run: ${e.message}`);
@@ -160,63 +221,139 @@ async function generate(demo: boolean, uri?: vscode.Uri, exportName?: string): P
       }
       throw e;
     }
-    const relevant = new Set(analysis.files.map((f) => path.join(root, f.rel)));
-    const dirty = vscode.workspace.textDocuments.filter((d) => d.isDirty && relevant.has(d.uri.fsPath));
+    const dirty = unsaved(root, analysis);
     if (dirty.length) {
       const pick = await vscode.window.showWarningMessage(`${dirty.length} relevant file(s) have unsaved changes.`, { modal: true, detail: dirty.map((d) => vscode.workspace.asRelativePath(d.uri)).join('\n') }, 'Save and Continue');
       if (pick !== 'Save and Continue') return undefined;
       for (const d of dirty) if (!(await d.save())) return undefined;
-      analysis = analyzeTarget(root, target.uri.fsPath, target.exportName);
+      analysis = preflight(root, target.uri.fsPath, target.exportName, pipelineMode);
     }
 
-    let provider: ModelProvider;
-    if (demo) provider = new FakeProvider();
-    else {
+    let how: RunMode = { mode: 'audit' };
+    if (mode === 'demo') how = { provider: new FakeProvider() };
+    else if (mode === 'generate') {
       const model = await currentModel();
       if (!model) return undefined;
-      provider = new VsCodeLmProvider(model);
+      how = { provider: new VsCodeLmProvider(model) };
     }
     const prompt = buildPrompt(analysis, evidenceFiles(analysis), { maxCases: 8, existingTitles: existingTitles(analysis) });
-    if (!(await ensureConsent(provider, analysis.files.map((f) => f.rel), prompt))) return undefined;
+    if (!(await ensureConsent(how.provider, analysis.files.map((f) => f.rel), prompt))) return undefined;
 
-    const cfg = vscode.workspace.getConfiguration('testforge');
-    const abort = new AbortController();
-    active.set(root, abort);
-    output.appendLine(`[${new Date().toISOString()}] ${demo ? 'DEMO ' : ''}run for ${target.exportName} in ${vscode.workspace.asRelativePath(target.uri)} using ${provider.label}`);
-    const report = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: `TestForge${demo ? ' (DEMO)' : ''}: ${target.exportName}`, cancellable: true },
-      (progress, token) => {
-        token.onCancellationRequested(() => abort.abort());
-        return runPipeline({
-          root,
-          sourceAbs: target.uri.fsPath,
-          exportName: target.exportName,
-          provider,
-          nodePath: cfg.get<string>('nodePath') || undefined,
-          mutationSample: cfg.get<number>('mutationSample'),
-          globalDeadlineMs: (cfg.get<number>('globalDeadlineSeconds') ?? 180) * 1000,
-          signal: abort.signal,
-          onStage: (stage, message) => {
-            progress.report({ message });
-            output.appendLine(`  ${stage}: ${message}`);
-          },
-        });
-      },
-    );
-    const run: StoredRun = { report, root, savedAt: Date.now() };
-    await saveRun(run);
-    showRun(run);
-    output.appendLine(`  result: ${report.status}${report.failure ? ` (${report.failure.kind}: ${report.failure.message})` : ''}`);
+    const report = await execute(root, target, how);
     void vscode.commands.executeCommand('testforge.results.focus');
-    const summary = report.failure ? `${report.status.toUpperCase()}: ${report.failure.message}` : `${report.status.toUpperCase()}. See the TestForge Results view.`;
-    if (report.status === 'completed') void vscode.window.showInformationMessage(`TestForge ${summary}`, 'Preview Tests').then((p) => p && previewTests());
-    else void vscode.window.showWarningMessage(`TestForge ${summary}`);
+    const scored = report.mode === 'audit' ? ` Existing tests: ${fmtScore(report.scores.baseline)}.` : '';
+    const summary = report.failure ? `${report.status.toUpperCase()}: ${report.failure.message}` : `${report.status.toUpperCase()}.${scored} See the TestForge Results view.`;
+    if (report.status !== 'completed') void vscode.window.showWarningMessage(`TestForge ${summary}`);
+    else if (report.generatedTest) void vscode.window.showInformationMessage(`TestForge ${summary}`, 'Preview Tests').then((p) => p && previewTests());
+    else void vscode.window.showInformationMessage(`TestForge ${summary}`);
     return report;
   } finally {
-    active.delete(root);
     release();
   }
 }
+
+// ---------- chat tools (Copilot agent mode) ----------
+
+interface ToolInput {
+  filePath: string;
+  functionName?: string;
+}
+
+const toolText = (text: string) => new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart(text)]);
+
+/** Resolves `filePath` (absolute, or relative to a workspace folder) and the function. Throws a message for the calling model. */
+function toolTarget(input: ToolInput): { root: string; uri: vscode.Uri; exportName: string } {
+  if (typeof input?.filePath !== 'string' || !input.filePath) throw new Error('filePath is required: the .ts module that exports the function, for example src/age.ts.');
+  const local = (vscode.workspace.workspaceFolders ?? []).filter((f) => f.uri.scheme === 'file');
+  const candidates = path.isAbsolute(input.filePath) ? [input.filePath] : local.map((f) => path.join(f.uri.fsPath, input.filePath));
+  const abs = candidates.find((p) => fs.statSync(p, { throwIfNoEntry: false })?.isFile());
+  const folder = abs ? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(abs)) : undefined;
+  if (!abs || folder?.uri.scheme !== 'file') throw new Error(`${input.filePath} is not a file in a local workspace folder. Pass an absolute path or a path relative to the workspace folder.`);
+  const rel = vscode.workspace.asRelativePath(abs);
+  if (!abs.endsWith('.ts') || /\.(test|spec|d)\.ts$/.test(abs)) throw new Error(`${rel} is not a TypeScript source module. Pass the .ts file that exports the function (for example src/age.ts), not a test or declaration file.`);
+  let exportName = input.functionName;
+  if (!exportName) {
+    const exports = findExports(parse(abs, fs.readFileSync(abs, 'utf8')));
+    const eligible = exports.filter((e) => e.eligible);
+    if (eligible.length > 1) throw new Error(`${rel} exports ${eligible.length} eligible functions (${eligible.map((e) => e.name).join(', ')}). Pass functionName.`);
+    if (!eligible.length) throw new Error(`${rel} has no eligible exported function. ${exports.map((e) => `${e.name}: ${e.reason}`).join('; ') || 'Only named exported functions and const arrow functions are supported.'}`);
+    exportName = eligible[0].name;
+  }
+  return { root: folder.uri.fsPath, uri: vscode.Uri.file(abs), exportName };
+}
+
+/**
+ * Runs that the user confirmed in prepareInvocation (mode, function, model and files). invoke() runs only a
+ * confirmed run, so a change between the confirmation and the run (another model, another import) asks again.
+ */
+const confirmed = new Set<string>();
+const consentKey = (mode: string, target: { uri: vscode.Uri; exportName: string }, analysis: TargetAnalysis, model?: vscode.LanguageModelChat) =>
+  [mode, target.uri.fsPath, target.exportName, model?.id ?? '', ...analysis.files.map((f) => f.rel)].join('\n');
+
+/** The confirmation is the consent for tool runs: it says which files go to which model, and that project code runs. */
+async function prepareTool(mode: 'audit' | 'generate', input: ToolInput): Promise<vscode.PreparedToolInvocation> {
+  // Without a resolvable run there is nothing to confirm: invoke() reports the problem without running anything.
+  const checking = { invocationMessage: `TestForge: checking ${input?.filePath ?? 'the request'}` };
+  let target, analysis, model;
+  try {
+    if (!vscode.workspace.isTrusted) return checking;
+    target = toolTarget(input);
+    analysis = preflight(target.root, target.uri.fsPath, target.exportName, mode);
+    model = mode === 'generate' ? await currentModel(false) : undefined;
+  } catch {
+    return checking;
+  }
+  if (mode === 'generate' && !model) return checking;
+  confirmed.add(consentKey(mode, target, analysis, model));
+  const files = analysis.files.map((f) => f.rel).join(', ');
+  const fn = `${target.exportName} (${vscode.workspace.asRelativePath(target.uri)})`;
+  const risk = 'This runs your code as you; temporary copies are NOT a security sandbox.';
+  const [invocationMessage, title, message] = model
+    ? [
+        `Generating and verifying tests for ${fn} with ${modelLabel(model)}`,
+        `Generate and verify tests for ${target.exportName}?`,
+        `TestForge will send ${files} to ${modelLabel(model)} in up to ${LIMITS.maxModelRequests} requests to propose test cases. It will then run your project's TypeScript compiler and Vitest on temporary copies of these files and the generated tests. ${risk} Nothing is written to your workspace: the tests are applied only when you run "TestForge: Apply Tests".`,
+      ]
+    : [
+        `Auditing the existing tests of ${fn}`,
+        `Audit the existing tests of ${target.exportName}?`,
+        `TestForge will run your project's TypeScript compiler and Vitest on temporary copies of ${files} to see which small code changes (mutations) of ${target.exportName} the existing tests detect. TestForge uses no AI model; only the result (scores, changed code fragments and test names) comes back to this chat. ${risk} Your files are not changed.`,
+      ];
+  // Headless extension-host tests: lm.invokeTool without a chat token would show the confirmation as a dialog.
+  return testConsent() ? { invocationMessage } : { invocationMessage, confirmationMessages: { title, message } };
+}
+
+/** Runs one tool call: the same guards and shared run as the commands, without any dialog. Never applies tests. */
+async function invokeTool(mode: 'audit' | 'generate', input: ToolInput, token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
+  if (!vscode.workspace.isTrusted) throw new Error('TestForge needs a trusted workspace to analyze or run code. Ask the user to trust this workspace.');
+  const target = toolTarget(input);
+  const release = mutex.tryAcquire(target.root);
+  if (!release) throw new Error('A TestForge run is already active in this workspace. Wait until it finishes, then call this tool again.');
+  try {
+    let analysis: TargetAnalysis;
+    try {
+      analysis = preflight(target.root, target.uri.fsPath, target.exportName, mode);
+    } catch (e) {
+      // The analyzer states precisely what is outside the support matrix.
+      if (e instanceof TestForgeError) return toolText(`TestForge cannot run on ${target.exportName} in ${vscode.workspace.asRelativePath(target.uri)}: ${e.message}`);
+      throw e;
+    }
+    const dirty = unsaved(target.root, analysis).map((d) => vscode.workspace.asRelativePath(d.uri));
+    if (dirty.length) throw new Error(`Unsaved changes in ${dirty.join(', ')}. TestForge runs the saved files: ask the user to save them, then call this tool again.`);
+    const model = mode === 'generate' ? await currentModel(false) : undefined;
+    if (mode === 'generate' && !model) throw new Error('No language model is available to TestForge. Ask the user to sign in to a model provider such as GitHub Copilot, or to pick a model with "TestForge: Select Model".');
+    if (!confirmed.delete(consentKey(mode, target, analysis, model))) throw new Error('The files or the model changed after the confirmation, so TestForge did not run. Call this tool again.');
+    const report = await execute(target.root, target, model ? { provider: new VsCodeLmProvider(model) } : { mode: 'audit' }, token);
+    return toolText(summarize(report));
+  } finally {
+    release();
+  }
+}
+
+const chatTool = (mode: 'audit' | 'generate'): vscode.LanguageModelTool<ToolInput> => ({
+  prepareInvocation: (options) => prepareTool(mode, options.input),
+  invoke: (options, token) => invokeTool(mode, options.input, token),
+});
 
 // ---------- preview ----------
 
@@ -318,7 +455,7 @@ async function openReport(): Promise<void> {
     return;
   }
   const pick = await vscode.window.showQuickPick(
-    runs.map((r) => ({ label: `${r.report.exportName} · ${r.report.status}`, description: `${r.report.sourceFile} · ${new Date(r.savedAt).toLocaleString()}${r.report.demo ? ' · DEMO' : ''}`, run: r })),
+    runs.map((r) => ({ label: `${r.report.exportName} · ${r.report.status}`, description: `${r.report.sourceFile} · ${new Date(r.savedAt).toLocaleString()}${r.report.demo ? ' · DEMO' : ''}${r.report.mode === 'audit' ? ' · AUDIT' : ''}`, run: r })),
     { title: 'TestForge: open a report' },
   );
   if (pick) showRun(pick.run);
@@ -329,9 +466,20 @@ async function openReport(): Promise<void> {
 class LensProvider implements vscode.CodeLensProvider {
   provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
     if (doc.uri.scheme !== 'file' || /\.(test|spec|d)\.ts$/.test(doc.fileName)) return [];
+    let audit = false; // only modules with adjacent tests can be audited
+    try {
+      audit = adjacentTestNames(doc.fileName).length > 0;
+    } catch {
+      // folder not readable: no audit lens
+    }
     return findExports(parse(doc.fileName, doc.getText()))
       .filter((e) => e.eligible)
-      .map((e) => new vscode.CodeLens(new vscode.Range(e.line - 1, 0, e.line - 1, 0), { title: 'TestForge: Generate & Verify Tests', command: 'testforge.generateAndVerify', arguments: [doc.uri, e.name] }));
+      .flatMap((e) => {
+        const range = new vscode.Range(e.line - 1, 0, e.line - 1, 0);
+        const lenses = [new vscode.CodeLens(range, { title: 'TestForge: Generate & Verify Tests', command: 'testforge.generateAndVerify', arguments: [doc.uri, e.name] })];
+        if (audit) lenses.push(new vscode.CodeLens(range, { title: 'TestForge: Audit Tests', command: 'testforge.auditTests', arguments: [doc.uri, e.name] }));
+        return lenses;
+      });
   }
 }
 
@@ -359,8 +507,11 @@ export function activate(context: vscode.ExtensionContext): { lastReport(): RunR
     vscode.window.registerTreeDataProvider('testforge.results', results),
     vscode.workspace.registerTextDocumentContentProvider(PREVIEW_SCHEME, { onDidChange: previewEmitter.event, provideTextDocumentContent: (u) => previews.get(u.toString()) ?? '' }),
     vscode.languages.registerCodeLensProvider({ language: 'typescript', scheme: 'file' }, new LensProvider()),
-    cmd('testforge.generateAndVerify', (uri?: vscode.Uri, name?: string) => generate(false, uri, name)),
-    cmd('testforge.runDemo', (uri?: vscode.Uri, name?: string) => generate(true, uri, name)),
+    vscode.lm.registerTool('testforge_auditTests', chatTool('audit')),
+    vscode.lm.registerTool('testforge_generateAndVerify', chatTool('generate')),
+    cmd('testforge.generateAndVerify', (uri?: vscode.Uri, name?: string) => generate('generate', uri, name)),
+    cmd('testforge.runDemo', (uri?: vscode.Uri, name?: string) => generate('demo', uri, name)),
+    cmd('testforge.auditTests', (uri?: vscode.Uri, name?: string) => generate('audit', uri, name)),
     cmd('testforge.selectModel', async () => {
       const m = await pickModel();
       if (m) void vscode.window.showInformationMessage(`TestForge will use ${modelLabel(m)}.`);

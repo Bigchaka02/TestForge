@@ -1,4 +1,5 @@
-// Orchestrates one Generate & Verify run. vscode-free so it runs under Vitest.
+// Orchestrates one Generate & Verify run, or an audit of the existing tests (no model).
+// vscode-free so it runs under Vitest.
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { analyzeTarget, TargetAnalysis } from '../analysis/analyze';
@@ -12,11 +13,10 @@ import type { ModelProvider } from '../providers/provider';
 import { CaseRecord, LIMITS, MutationRecord, RunReport, Stage, SuiteRun, TerminalStatus, TestForgeError } from './types';
 import { newRunId, sha256 } from './util';
 
-export interface PipelineInput {
+interface PipelineOptions {
   root: string;
   sourceAbs: string;
   exportName: string;
-  provider: ModelProvider;
   nodePath?: string;
   mutationSample?: number;
   globalDeadlineMs?: number;
@@ -26,6 +26,11 @@ export interface PipelineInput {
   /** Set false to skip the improvement request (default on). */
   improve?: boolean;
 }
+
+/** Generate (the default) asks `provider` for cases. Audit mutation-checks the existing adjacent tests with no model. */
+export type RunMode = { mode?: 'generate'; provider: ModelProvider } | { mode: 'audit'; provider?: undefined };
+
+export type PipelineInput = PipelineOptions & RunMode;
 
 const id = (file: string, title: string) => `${file}::${title}`;
 const signature = (r: SuiteRun) => r.tests.map((t) => `${id(t.file, t.title)}=${t.status}`).sort().join('\n');
@@ -47,19 +52,33 @@ const STATUS_FOR: Record<TestForgeError['kind'], TerminalStatus> = {
   infrastructure: 'failed',
 };
 
+/**
+ * Preflight shared with the editor: `analyzeTarget`'s support matrix, plus existing tests for an audit.
+ * Throws TestForgeError with a precise reason.
+ */
+export function preflight(root: string, sourceAbs: string, exportName: string, mode: RunMode['mode']): TargetAnalysis {
+  const a = analyzeTarget(root, sourceAbs, exportName);
+  if (mode === 'audit' && !a.baselineTests.length) {
+    throw new TestForgeError('unsupported', `There are no existing tests next to ${a.sourceRel} to audit. Add ${a.sourceRel.replace(/\.ts$/, '.test.ts')} or use Generate & Verify Tests.`);
+  }
+  return a;
+}
+
 export async function runPipeline(input: PipelineInput): Promise<RunReport> {
   const runId = newRunId();
+  const audit = input.mode === 'audit';
   const report: RunReport = {
     schemaVersion: 1,
     runId,
+    mode: audit ? 'audit' : 'generate',
     status: 'failed',
     stage: 'idle',
-    demo: input.provider.isFake,
+    demo: !!input.provider?.isFake,
     scope: 'selected-module test scope',
     exportName: input.exportName,
     sourceFile: path.relative(input.root, input.sourceAbs).split(path.sep).join('/'),
     inputHashes: {},
-    model: input.provider.label,
+    model: input.provider?.label ?? 'none (audit only)',
     toolVersions: {},
     startedAt: new Date().toISOString(),
     stageMs: {},
@@ -77,7 +96,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     limitations: [],
     cleanup: 'pending',
   };
-  if (input.provider.isFake) report.limitations.push('DEMO mode: cases come from a deterministic fake provider, not an AI model.');
+  if (input.provider?.isFake) report.limitations.push('DEMO mode: cases come from a deterministic fake provider, not an AI model.');
 
   const ctrl = new AbortController();
   const sig = ctrl.signal;
@@ -101,13 +120,21 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
 
   let run: RunDir | undefined;
   let partial = false;
+  /** After a mutation loop: a cancel stops the run, a reached deadline keeps the results as partial. */
+  const endMutations = () => {
+    if (!sig.aborted) return;
+    const reason = sig.reason as TestForgeError;
+    if (reason.kind === 'cancelled') throw reason;
+    report.limitations.push(reason.message);
+    partial = true;
+  };
   try {
     // Stage 1-2: preflight and freeze inputs
     stage('preflight', 'Checking project support');
-    const a = analyzeTarget(input.root, input.sourceAbs, input.exportName);
+    const a = preflight(input.root, input.sourceAbs, input.exportName, input.mode);
     report.toolVersions = { ...a.toolVersions };
     report.baselineTests = a.baselineTests;
-    report.contextFiles = a.files.map((f) => f.rel);
+    if (!audit) report.contextFiles = a.files.map((f) => f.rel); // an audit sends nothing
     report.contextExclusions = a.exclusions;
     for (const f of a.files) report.inputHashes[f.rel] = f.hash;
     Object.assign(report.inputHashes, a.packageHashes);
@@ -123,7 +150,10 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     // Stage 3: original must type-check
     const tc = await typeCheck(tools, copy, run.tmp, sig);
     checkAbort();
-    if (!tc.ok) throw new TestForgeError('original-type-error', tc.timedOut ? 'Type checking the original project timed out.' : 'The original code does not type-check, so TestForge stopped before generating tests.', tc.output);
+    if (!tc.ok) {
+      const why = audit ? 'The original code and its existing tests do not type-check, so TestForge stopped before running them.' : 'The original code does not type-check, so TestForge stopped before generating tests.';
+      throw new TestForgeError('original-type-error', tc.timedOut ? 'Type checking the original project timed out.' : why, tc.output);
+    }
 
     // Stage 4: baseline suite A, twice
     stage('checking-baseline', 'Running existing tests');
@@ -143,6 +173,32 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
       baselineIds = new Set(runs[0].tests.map((t) => id(t.file, t.title)));
     } else {
       report.limitations.push('No baseline tests were found next to the module, so there is no before/after comparison.');
+    }
+
+    // Audit: no model request and no generated file. Each sampled mutant faces the existing tests alone.
+    if (input.mode === 'audit') {
+      stage('checking-mutations', 'Checking which code changes the existing tests detect');
+      const pristine = a.target.node.getSourceFile().text;
+      report.mutations = sampleMutants(a, report, input.mutationSample);
+      for (const [i, m] of report.mutations.entries()) {
+        if (sig.aborted) {
+          m.baseline = 'not-run';
+          continue;
+        }
+        input.onStage?.('checking-mutations', `Mutation ${i + 1}/${report.mutations.length}: ${m.original} → ${m.replacement || '(removed)'}`);
+        writeFile(copy, report.sourceFile, applyMutation(pristine, m));
+        const mtc = await typeCheck(tools, copy, run.tmp, sig);
+        if (!mtc.ok) {
+          m.baseline = mtc.cancelled ? 'not-run' : mtc.timedOut ? 'timeout' : 'invalid';
+          continue;
+        }
+        const b = classify(await runVitest(tools, copy, run.tmp, a.baselineTests, sig), baselineIds);
+        Object.assign(m, { baseline: b.outcome, detectingTests: b.detecting, note: b.note });
+      }
+      endMutations();
+      report.scores.baseline = score(report.mutations.map((m) => m.baseline));
+      if (report.mutations.some((m) => m.baseline === 'survived')) report.limitations.push('Some mutations survive the existing tests: behavior the tests do not check, or equivalent changes.');
+      return report;
     }
 
     // Stage 5: generate candidates (data only)
@@ -264,13 +320,8 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
 
     // Stage 7-8: bounded mutation set, both suites against the same mutations
     stage('checking-mutations', 'Checking which code changes the tests detect');
-    const sf = a.target.node.getSourceFile();
-    const pristine = sf.text;
-    const all = enumerateMutations(sf, a.target.node, report.sourceFile, report.inputHashes[report.sourceFile]);
-    const n = Math.max(1, Math.min(input.mutationSample ?? LIMITS.defaultMutations, LIMITS.maxMutations));
-    if (!all.length) report.limitations.push('No supported mutation opportunities.');
-    else report.limitations.push(`Mutation results cover a sample of ${Math.min(n, all.length)} of ${all.length} supported mutations (hypothetical faults, not confirmed bugs).`);
-    report.mutations = sampleMutations(all, n).map((m) => ({ ...m, detectingTests: [] }));
+    const pristine = a.target.node.getSourceFile().text;
+    report.mutations = sampleMutants(a, report, input.mutationSample);
 
     /** Runs each mutant against the current generated file. `generatedOnly` keeps baseline outcomes (re-checks after the improvement pass). */
     const checkMutants = async (list: MutationRecord[], suiteIds: Set<string>, generatedOnly: boolean) => {
@@ -314,12 +365,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     };
 
     await checkMutants(report.mutations, allIds, false);
-    if (sig.aborted) {
-      const reason = sig.reason as TestForgeError;
-      if (reason.kind === 'cancelled') throw reason;
-      report.limitations.push(reason.message);
-      partial = true;
-    }
+    endMutations();
     scoreAll();
 
     // Stage 9: improvement pass. One extra request aimed at surviving mutants; new cases
@@ -373,6 +419,15 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     if (report.status === 'completed') report.stage = 'completed';
     report.finishedAt = new Date().toISOString();
   }
+}
+
+/** Enumerates the supported mutations in the target body and keeps an evenly spread sample (noted as a limitation). */
+function sampleMutants(a: TargetAnalysis, report: RunReport, sample: number | undefined): MutationRecord[] {
+  const all = enumerateMutations(a.target.node.getSourceFile(), a.target.node, report.sourceFile, report.inputHashes[report.sourceFile]);
+  const n = Math.max(1, Math.min(sample ?? LIMITS.defaultMutations, LIMITS.maxMutations));
+  if (!all.length) report.limitations.push('No supported mutation opportunities.');
+  else report.limitations.push(`Mutation results cover a sample of ${Math.min(n, all.length)} of ${all.length} supported mutations (hypothetical faults, not confirmed bugs).`);
+  return sampleMutations(all, n).map((m) => ({ ...m, detectingTests: [] }));
 }
 
 /**
