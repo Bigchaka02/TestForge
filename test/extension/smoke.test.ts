@@ -86,6 +86,22 @@ describe('TestForge extension (smoke)', () => {
     assert.equal(lens.command?.command, 'testforge.generateAndVerify');
   });
 
+  it('shows an audit CodeLens only for modules with adjacent tests', async () => {
+    await getExtension().activate();
+    const lenses = async (file: string) => {
+      // The CodeLens command needs the document to be open.
+      const { uri } = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(workspaceRoot(), 'src', file)));
+      // Wait for the generate lens, so an absent audit lens means the provider ran.
+      return waitFor(`TestForge CodeLenses in ${file}`, async () => {
+        const all = (await vscode.commands.executeCommand<vscode.CodeLens[]>('vscode.executeCodeLensProvider', uri, 100)) ?? [];
+        const ours = all.map((l) => l.command?.command).filter((c) => c?.startsWith('testforge.'));
+        return ours.includes('testforge.generateAndVerify') ? ours : undefined;
+      });
+    };
+    assert.ok((await lenses('age.ts')).includes('testforge.auditTests'), 'no audit CodeLens in age.ts, which has age.test.ts');
+    assert.ok(!(await lenses('clamp.ts')).includes('testforge.auditTests'), 'audit CodeLens in clamp.ts, which has no tests');
+  });
+
   it('runDemo on isEligible produces a report', async function () {
     const ext = getExtension();
     const api = await ext.activate();
@@ -176,5 +192,27 @@ describe('TestForge extension (smoke)', () => {
     assert.match(md, /^### TestForge proof: `finalPrice` in `src\/discount\.ts`\n\n> DEMO run/);
     assert.match(md, /\*\*Possible bugs\*\*[^\n]*\n- member order of exactly 100 costs 90: /);
     assert.doesNotMatch(md, /STALE/);
+  });
+
+  it('contributes both chat tools to vscode.lm.tools', async () => {
+    await getExtension().activate();
+    for (const name of ['testforge_auditTests', 'testforge_generateAndVerify']) {
+      await waitFor(`${name} in vscode.lm.tools`, () => (vscode.lm.tools.some((t) => t.name === name) ? true : undefined));
+    }
+  });
+
+  it('the audit chat tool scores the existing tests of isEligible', async function () {
+    this.timeout(180_000);
+    const api = await getExtension().activate();
+    // No chat request: VS Code runs prepareInvocation, then invoke. The extension omits the
+    // confirmation under TESTFORGE_TEST_CONSENT so no dialog blocks the headless host.
+    const result = await vscode.lm.invokeTool('testforge_auditTests', { input: { filePath: 'src/age.ts', functionName: 'isEligible' }, toolInvocationToken: undefined });
+    const text = result.content.map((p) => (p as { value?: unknown }).value).filter((v) => typeof v === 'string').join('');
+    assert.match(text, /Mutation score of the existing tests: 1\/3 detected/, text);
+    assert.match(text, /line 3: >= → >/, text);
+    // The run is saved and shown like a command run.
+    const report = api?.lastReport() as { mode?: unknown; sourceFile?: unknown } | undefined;
+    assert.equal(report?.mode, 'audit');
+    assert.equal(report?.sourceFile, 'src/age.ts');
   });
 });

@@ -29,10 +29,11 @@ const ratio = (s?: SuiteScore) => (!s ? 'n/a' : s.rate === null ? 'N/A (no valid
 /** `stale`: why the run may no longer match the code (relative paths, from staleReasons). */
 export function proofMarkdown(report: RunReport, stale: string[] = []): string {
   const r = report;
-  const auditOnly = !r.scores.generated && !!r.scores.baseline;
+  const auditOnly = r.mode === 'audit';
   const out: string[] = [];
   out.push(`### TestForge proof: ${mdCode(r.exportName)} in ${mdCode(r.sourceFile)}`);
   if (r.demo) out.push('', '> DEMO run: cases came from a deterministic fake model, not an AI model.');
+  if (auditOnly) out.push('', '> Audit of the existing tests: no AI model and no generated tests.');
   if (stale.length) out.push('', `> STALE: ${stale.map((s) => mdText(s, 120)).join('; ')}. These results may not match the current code.`);
   out.push('');
 

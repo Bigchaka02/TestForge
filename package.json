@@ -34,6 +34,11 @@
         "category": "TestForge"
       },
       {
+        "command": "testforge.auditTests",
+        "title": "Audit Existing Tests (no AI)",
+        "category": "TestForge"
+      },
+      {
         "command": "testforge.selectModel",
         "title": "Select Model",
         "category": "TestForge"
@@ -92,6 +97,58 @@
         }
       ]
     },
+    "languageModelTools": [
+      {
+        "name": "testforge_auditTests",
+        "displayName": "TestForge: Audit Existing Tests",
+        "toolReferenceName": "testforgeAudit",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(shield)",
+        "userDescription": "Mutation-checks the existing Vitest tests of an exported TypeScript function. No AI model is used and no file is changed.",
+        "modelDescription": "Measures how well the EXISTING Vitest tests of one exported TypeScript function catch bugs, without any AI model. TestForge runs the adjacent tests twice on temporary copies of the code, then applies small code changes (mutations such as `>=` -> `>` or `18` -> `19`) inside the function one at a time and reports which ones make a test fail. Use it after writing or changing tests for a function to verify that they would catch real bugs, and again after adding tests for the surviving mutations. Returns the mutation score of the existing tests, every surviving mutation (line, original -> replacement), the tests that detected the others, or the precise reason the function or its tests are not supported. Limits: a named exported function (function declaration or const arrow function; async is fine; no generics, classes or default exports) in a .ts file of an npm ESM project with vitest 5 and typescript 6 or 7 installed locally, with only relative .ts imports. The tests must be in an adjacent <module>.test.ts (or .spec.ts) file and use plain test/it/describe/expect with string titles (no .each, .only, .skip, hooks, vi or snapshots). Changes no files. Takes seconds to a minute.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "The .ts module that exports the function (not its test file): an absolute path, or a path relative to the workspace folder such as src/age.ts."
+            },
+            "functionName": {
+              "type": "string",
+              "description": "Name of the exported function. May be omitted when the file has exactly one eligible exported function."
+            }
+          },
+          "required": [
+            "filePath"
+          ]
+        }
+      },
+      {
+        "name": "testforge_generateAndVerify",
+        "displayName": "TestForge: Generate & Verify Tests",
+        "toolReferenceName": "testforge",
+        "canBeReferencedInPrompt": true,
+        "icon": "$(beaker)",
+        "userDescription": "Generates Vitest tests for an exported TypeScript function with your TestForge model, runs them and checks them with mutation testing. Nothing is applied until you run TestForge: Apply Tests.",
+        "modelDescription": "Generates Vitest test cases for one exported TypeScript function with the user's selected language model, runs them twice against temporary copies of the current code, and uses mutation testing to compare how many small code changes the existing tests detect with how many the generated tests detect. One improvement round asks for cases that detect the surviving mutations. Returns the status, each generated case as PASS or FAIL with its title (a FAIL means the case fails against the current code: a possible bug or a wrong expectation), the mutation scores, the before/after comparison, the improvement pass and the surviving mutations. The generated tests are NOT written to the workspace: the user reviews them in the TestForge Results view and creates the file with the command \"TestForge: Apply Tests\". Use it when the user asks for tests to be generated and verified for a function. It sends the module, its relative imports and its adjacent tests to the model. Same limits as testforge_auditTests, except that adjacent tests are optional. Takes up to a few minutes.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {
+              "type": "string",
+              "description": "The .ts module that exports the function (not its test file): an absolute path, or a path relative to the workspace folder such as src/age.ts."
+            },
+            "functionName": {
+              "type": "string",
+              "description": "Name of the exported function. May be omitted when the file has exactly one eligible exported function."
+            }
+          },
+          "required": [
+            "filePath"
+          ]
+        }
+      }
+    ],
     "menus": {
       "view/title": [
         {

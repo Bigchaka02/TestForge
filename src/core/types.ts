@@ -175,6 +175,8 @@ export interface Comparison {
 export interface RunReport {
   schemaVersion: 1;
   runId: string;
+  /** Audit runs check the existing tests only (no model, no generated file). Reports saved without it are generate runs. */
+  mode?: 'generate' | 'audit';
   status: TerminalStatus;
   stage: Stage;
   demo: boolean;

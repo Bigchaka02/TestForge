@@ -9,6 +9,7 @@ import { runPipeline, PipelineInput } from '../../src/core/pipeline';
 import type { RunReport } from '../../src/core/types';
 import { sha256 } from '../../src/core/util';
 import { FakeProvider } from '../../src/providers/fake';
+import { summarize } from '../../src/ui/summary';
 
 const ROOT = path.resolve(__dirname, '../../fixtures/sample');
 const SRC = path.join(ROOT, 'src');
@@ -94,7 +95,9 @@ function newTmpBase(): string {
 async function run(file: string, exportName: string, over: Partial<PipelineInput> = {}): Promise<{ report: RunReport; tmpBase: string; ms: number }> {
   const tmpBase = over.tmpBase ?? newTmpBase();
   const t0 = Date.now();
-  const report = await runPipeline({ root: ROOT, sourceAbs: path.join(SRC, file), exportName, provider: new FakeProvider(), tmpBase, ...over });
+  const base = { root: ROOT, sourceAbs: path.join(SRC, file), exportName, tmpBase };
+  // Audits take no provider; generate runs default to the fake one.
+  const report = await runPipeline(over.mode === 'audit' ? { ...base, ...over, mode: 'audit' } : { ...base, provider: new FakeProvider(), ...over, mode: 'generate' });
   const ms = Date.now() - t0;
   // Cleanup happened for every exit path and nothing is left running.
   expect(report.cleanup).toBe('done');
@@ -343,6 +346,43 @@ describe('pipeline on fixtures/sample', () => {
     const { report } = await run('age.ts', 'nope');
     expect(report.status).toBe('unsupported');
     expect(report.failure?.kind).toBe('unsupported');
+  });
+
+  test('audit: isEligible — existing tests detect 1/3 mutations, no model request, no generated file', async () => {
+    const { report } = await run('age.ts', 'isEligible', { mode: 'audit' });
+    expect(report.failure).toBeUndefined();
+    expect(report).toMatchObject({ mode: 'audit', status: 'completed', stage: 'completed', demo: false, model: 'none (audit only)', modelRequests: 0 });
+    expect(report.baselineTests).toEqual(['src/age.test.ts']);
+    expect(report.baselineRuns).toEqual(['completed', 'completed']);
+    expect(report.contextFiles).toEqual([]);
+    expect(report.cases).toEqual([]);
+    expect(report.candidateRuns).toEqual([]);
+    expect(report.generatedTest).toBeUndefined();
+    expect(report.generatedTestPath).toBeUndefined();
+    expect(Object.keys(report.stageMs)).toEqual(['preflight', 'snapshotting', 'checking-baseline', 'checking-mutations']);
+    expect(report.scores).toEqual({ baseline: { killed: 1, survived: 2, excluded: 0, rate: 1 / 3 } });
+    expect(report.mutations.map((m) => `${m.original}->${m.replacement}:${m.baseline}`)).toEqual(['>=->>:survived', '18->17:killed', '18->19:survived']);
+    expect(report.mutations.find((m) => m.replacement === '17')!.detectingTests).toEqual(['age 17 is not eligible']);
+    for (const m of report.mutations) expect(m.generated).toBeUndefined();
+    expect(report.inputHashes['src/age.test.ts']).toBe(before['age.test.ts']);
+
+    // The text the chat tool returns: score, every survivor, and where to add tests.
+    const text = summarize(report);
+    expect(text).toContain('Mutation score of the existing tests: 1/3 detected.');
+    expect(text).toContain('- line 3: >= → >\n- line 3: 18 → 19');
+    expect(text).toContain('- line 3: 18 → 17 (by: age 17 is not eligible)');
+    expect(text).toMatch(/add test cases to src\/age\.test\.ts .* then call this tool again/);
+    expect(text).not.toMatch(/Apply Tests/);
+  });
+
+  test('audit: clamp has no adjacent tests — unsupported with a clear reason, nothing runs', async () => {
+    const { report } = await run('clamp.ts', 'clamp', { mode: 'audit' });
+    expect(report.status).toBe('unsupported');
+    expect(report.failure).toMatchObject({ kind: 'unsupported', message: 'There are no existing tests next to src/clamp.ts to audit. Add src/clamp.test.ts or use Generate & Verify Tests.' });
+    expect(report.modelRequests).toBe(0);
+    expect(report.baselineRuns).toEqual([]);
+    expect(report.mutations).toEqual([]);
+    expect(Object.keys(report.stageMs)).toEqual(['preflight']);
   });
 
   test('A16: fixture sources are byte-for-byte unchanged after all runs', () => {

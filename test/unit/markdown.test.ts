@@ -80,7 +80,8 @@ describe('proofMarkdown', () => {
   });
 
   test('baseline-only (audit) reports show only the existing-tests column', () => {
-    const md = proofMarkdown(report({ cases: [], scores: { baseline: { killed: 1, survived: 2, excluded: 0, rate: 1 / 3 } }, mutations: [mutation(3, '>=', '>', 'survived', undefined)] }));
+    const md = proofMarkdown(report({ mode: 'audit', model: 'none (audit only)', modelRequests: 0, cases: [], scores: { baseline: { killed: 1, survived: 2, excluded: 0, rate: 1 / 3 } }, mutations: [mutation(3, '>=', '>', 'survived', undefined)] }));
+    expect(md).toContain('> Audit of the existing tests: no AI model and no generated tests.');
     expect(md).toContain('| Existing tests | 1 / 3 |');
     expect(md).not.toContain('With TestForge tests');
     expect(md).toContain('| 3 | `>=` → `>` | **missed** |');
