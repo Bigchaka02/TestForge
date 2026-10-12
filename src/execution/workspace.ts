@@ -33,9 +33,26 @@ function isOwned(dir: string): boolean {
   }
 }
 
+/** Removes a symlink or Windows junction itself, never what it points to. */
+function unlinkIfLink(p: string): void {
+  try {
+    if (!fs.lstatSync(p).isSymbolicLink()) return;
+  } catch {
+    return; // missing
+  }
+  try {
+    fs.unlinkSync(p);
+  } catch {
+    fs.rmdirSync(p); // a directory junction on Windows
+  }
+}
+
 /** Deletes a run directory only if it carries our ownership sentinel. */
 export function removeRunDir(dir: string): boolean {
   if (!isOwned(dir)) return false;
+  // Unlink each copy's node_modules link before the recursive delete: inside VS Code on Windows the
+  // recursive delete went through the junction and deleted packages from the project's node_modules.
+  for (const name of fs.readdirSync(dir)) unlinkIfLink(path.join(dir, name, 'node_modules'));
   fs.rmSync(dir, { recursive: true, force: true });
   return !fs.existsSync(dir);
 }

@@ -1,6 +1,7 @@
 // Extension-host smoke tests. They run inside a real VS Code with the
 // workspace folder fixtures/sample (see .vscode-test.mjs).
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 
@@ -134,6 +135,8 @@ describe('TestForge extension (smoke)', () => {
     assert.equal(score.range.start.line, fnLine);
     assert.match(score.command?.title ?? '', /^TestForge: existing tests catch 1\/3 changes → 3\/3 with generated tests/);
     assert.deepEqual(testforgeDiagnostics(ageUri()), []);
+    // Cleanup removes the temporary copies' node_modules links, never the project's packages.
+    for (const pkg of ['vitest', 'typescript']) assert.ok(fs.existsSync(path.join(workspaceRoot(), 'node_modules', pkg, 'package.json')), `the run deleted ${pkg} from the project's node_modules`);
   });
 
   it('runDemo on finalPrice warns about the documented case the code fails', async () => {

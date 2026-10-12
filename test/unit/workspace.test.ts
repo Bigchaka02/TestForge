@@ -84,7 +84,8 @@ describe('cleanupStale', () => {
 describe('execution copies', () => {
   test('copies files, links node_modules and writes our configs', () => {
     const project = path.join(dir, 'proj');
-    fs.mkdirSync(path.join(project, 'node_modules'), { recursive: true });
+    fs.mkdirSync(path.join(project, 'node_modules', 'vitest'), { recursive: true });
+    fs.writeFileSync(path.join(project, 'node_modules', 'vitest', 'package.json'), '{"version":"5.0.2"}');
     fs.writeFileSync(path.join(project, 'package.json'), '{"type":"module"}');
     const run = createRunDir('c', dir);
     const copy = createCopy(run, 'original', project, [{ rel: 'src/a.ts', text: 'export const a = 1;\n' }, { rel: 'src/a.test.ts', text: '' }], ['src/a.test.ts']);
@@ -96,6 +97,7 @@ describe('execution copies', () => {
     expect(() => writeFile(copy, '../escape.ts', 'x')).toThrow(TestForgeError);
     expect(() => createCopy(run, 'evil', project, [{ rel: '../../x.ts', text: '' }], [])).toThrow(/escapes the run directory/);
     expect(removeRunDir(run.root)).toBe(true);
-    expect(fs.existsSync(path.join(project, 'node_modules'))).toBe(true); // the link was removed, not its target
+    // The link was removed, not its target or anything in it.
+    expect(fs.readFileSync(path.join(project, 'node_modules', 'vitest', 'package.json'), 'utf8')).toBe('{"version":"5.0.2"}');
   });
 });

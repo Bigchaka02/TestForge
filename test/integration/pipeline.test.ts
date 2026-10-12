@@ -104,6 +104,7 @@ async function run(file: string, exportName: string, over: Partial<PipelineInput
   expect(fs.readdirSync(tmpBase)).toEqual([]);
   expect(processesUsing(tmpBase)).toEqual([]);
   expect(fs.readdirSync(SRC).sort()).toEqual(Object.keys(before).sort());
+  for (const pkg of ['vitest', 'typescript']) expect(fs.existsSync(path.join(ROOT, 'node_modules', pkg, 'package.json'))).toBe(true);
   return { report, tmpBase, ms };
 }
 
