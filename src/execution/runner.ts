@@ -174,15 +174,17 @@ export function parseVitestReport(json: string, copyDir: string, expectedFiles: 
   for (const file of report.testResults) {
     const rel = path.relative(copyDir, file.name).split(path.sep).join('/');
     if (file.assertionResults.length === 0) problems.push(`${rel}: ${file.message || 'no tests were collected'}`);
+    // A failed file without a failed test: a hook or suite failed outside any test (its tests then show as skipped).
+    else if (file.status === 'failed' && !file.assertionResults.some((a) => a.status === 'failed')) problems.push(`${rel}: ${file.message || 'a hook failed outside any test'}`);
     for (const a of file.assertionResults) {
       const msg = a.failureMessages.join('\n');
+      // skipped and todo tests stay in the results: they never pass or fail, so they never detect a mutation.
       const status = a.status === 'passed' ? 'passed' : a.status === 'failed' ? 'failed' : 'skipped';
       tests.push({ file: rel, title: a.fullName, status, timedOut: TIMEOUT_RE.test(msg), message: msg ? msg.slice(0, 2000) : undefined });
     }
   }
   const seen = new Set(tests.map((t) => t.file));
   for (const f of expectedFiles) if (!seen.has(f)) problems.push(`${f}: missing from the report`);
-  if (tests.some((t) => t.status === 'skipped')) problems.push('some tests were skipped');
   if (problems.length) return { status: 'error', tests, error: problems.join('; ') };
   if (tests.some((t) => t.timedOut)) return { status: 'timeout', tests };
   return { status: 'completed', tests };
@@ -205,5 +207,7 @@ export async function runVitest(tools: Tools, copyDir: string, tmp: string, test
   const run = parseVitestReport(fs.readFileSync(reportPath, 'utf8'), copyDir, testFiles);
   fs.rmSync(reportPath, { force: true });
   if (run.tests.length === 0 && run.status === 'completed') return { status: 'error', tests: [], error: 'zero tests executed' };
+  // Vitest also fails a run for errors its JSON report does not show, such as an unhandled error.
+  if (run.status === 'completed' && r.code !== 0 && !run.tests.some((t) => t.status === 'failed')) return { status: 'error', tests: run.tests, error: `Vitest exited with code ${r.code} although no test failed (for example an unhandled error)` };
   return run;
 }

@@ -174,6 +174,22 @@ describe('classify', () => {
   test('missing test identities are an error, not a kill', () => {
     expect(classify(run('completed', [t('a.test.ts', 'one', 'failed')]), suite).outcome).toBe('error');
   });
+
+  test('skipped and todo tests belong to the suite but never detect a mutation', () => {
+    const withSkip = ids('a.test.ts::one', 'a.test.ts::skipped', 'a.test.ts::todo');
+    const tests = (one: TestResult['status']) => [t('a.test.ts', 'one', one), t('a.test.ts', 'skipped', 'skipped'), t('a.test.ts', 'todo', 'skipped')];
+    expect(classify(run('completed', tests('passed')), withSkip)).toEqual({ outcome: 'survived', detecting: [] });
+    expect(classify(run('completed', tests('failed')), withSkip)).toEqual({ outcome: 'killed', detecting: ['one'] });
+    // Only skipped tests: nothing can fail.
+    expect(classify(run('completed', [t('a.test.ts', 'x', 'skipped')]), ids('a.test.ts::x')).outcome).toBe('survived');
+  });
+
+  test('.each titles are ordinary identities from the report', () => {
+    const each = ids('a.test.ts::g add(1, 2) = 3', 'a.test.ts::g add(2, 2) = 4');
+    const tests = (second: TestResult['status']) => [t('a.test.ts', 'g add(1, 2) = 3', 'passed'), t('a.test.ts', 'g add(2, 2) = 4', second)];
+    expect(classify(run('completed', tests('passed')), each).outcome).toBe('survived');
+    expect(classify(run('completed', tests('failed')), each)).toEqual({ outcome: 'killed', detecting: ['g add(2, 2) = 4'] });
+  });
 });
 
 describe('score and compare', () => {

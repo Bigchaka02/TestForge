@@ -118,7 +118,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     report.toolVersions.node = node.version;
     const tools = resolveTools(input.root, node.path);
     const sources = a.files.filter((f) => f.role === 'source').map((f) => f.rel);
-    const copy = createCopy(run, 'original', input.root, a.files, a.baselineTests);
+    const copy = createCopy(run, 'original', input.root, a.files, a.baselineTests, a.types);
 
     // Stage 3: original must type-check
     const tc = await typeCheck(tools, copy, run.tmp, sig);
@@ -201,7 +201,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     stage('validating-candidates', 'Running generated tests against the original code');
     const allTests = [...a.baselineTests, genRel];
     writeFile(copy, genRel, report.generatedTest);
-    writeConfigs(copy, sources, allTests);
+    writeConfigs(copy, sources, allTests, a.types);
     const tc2 = await typeCheck(tools, copy, run.tmp, sig);
     checkAbort();
     if (!tc2.ok) throw new TestForgeError('infrastructure', 'The generated test file did not type-check (a TestForge rendering problem, not your code).', tc2.output);
@@ -256,7 +256,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
         c.originalOutcome = !t ? 'not-run' : t.timedOut ? 'timeout' : t.status === 'passed' ? 'passed' : 'failed';
         if (t?.message) c.failureMessage = t.message;
       }
-      const ok = runs.length === 2 && runs.every((r) => r.status === 'completed') && sameResults(runs[0], runs[1]) && runs[0].tests.every((t) => t.status === 'passed');
+      const ok = runs.length === 2 && runs.every((r) => r.status === 'completed') && sameResults(runs[0], runs[1]) && runs[0].tests.every((t) => t.status !== 'failed');
       if (ok) return new Set(runs[0].tests.map((t) => id(t.file, t.title)));
       for (const c of added) Object.assign(c, { status: 'rejected', rejectReason: c.originalOutcome === 'passed' ? 'dropped with the other improvement cases' : `${c.originalOutcome} against the original code in the improvement pass` });
       return undefined;

@@ -41,7 +41,7 @@ export function staleReasons(run: StoredRun, dirtyPaths: string[]): string[] {
   try {
     const sourceAbs = path.join(root, report.sourceFile);
     const generated = report.generatedTestPath ? path.resolve(root, report.generatedTestPath) : '';
-    for (const t of adjacentTestNames(sourceAbs)) {
+    for (const t of adjacentTestNames(sourceAbs, root)) {
       const rel = path.relative(root, t).split(path.sep).join('/');
       if (!report.baselineTests.includes(rel) && path.resolve(t) !== generated) reasons.push(`new test file ${rel}`);
     }

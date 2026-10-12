@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { sameResults } from '../../src/core/pipeline';
 import type { CaseRecord, RunReport, SuiteRun } from '../../src/core/types';
-import { applyGenerated, StoredRun } from '../../src/storage/apply';
+import { applyGenerated, staleReasons, StoredRun } from '../../src/storage/apply';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'testforge-unit-apply-'));
 afterAll(() => fs.rmSync(base, { recursive: true, force: true }));
@@ -72,6 +72,22 @@ describe('applyGenerated (A15)', () => {
     expect(() => applyGenerated(stored({ cases: [failing] }), { allowFailing: false })).toThrow(/Apply Failing Candidate/);
     expect(applyGenerated(stored({ cases: [failing] }), { allowFailing: true }).kind).toBe('created');
     expect(() => applyGenerated(stored({ status: 'failed', failure: { kind: 'infrastructure', message: 'x' } }), { allowFailing: true })).toThrow(/cannot be applied/);
+  });
+});
+
+describe('staleReasons', () => {
+  test('a new baseline test anywhere TestForge looks makes the run stale; unrelated same-name files do not', () => {
+    fs.writeFileSync(path.join(root, 'src/m.ts'), 'export const f = (x: number) => x;\n');
+    const run = stored({ sourceFile: 'src/m.ts', baselineTests: [], inputHashes: {} });
+    expect(staleReasons(run, [])).toEqual([]);
+    fs.mkdirSync(path.join(root, 'test/unit'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'test/unit/m.test.ts'), "import { f } from '../../lib/m.js';\n");
+    expect(staleReasons(run, [])).toEqual([]);
+    fs.writeFileSync(path.join(root, 'test/m.test.ts'), "import { f } from '../src/m.js';\n");
+    fs.mkdirSync(path.join(root, 'src/__tests__'));
+    fs.writeFileSync(path.join(root, 'src/__tests__/m.spec.ts'), "import { f } from '../m.js';\n");
+    expect(staleReasons(run, [])).toEqual(['new test file src/__tests__/m.spec.ts', 'new test file test/m.test.ts']);
+    expect(staleReasons({ ...run, report: { ...run.report, baselineTests: ['src/__tests__/m.spec.ts', 'test/m.test.ts'] } }, [])).toEqual([]);
   });
 });
 
