@@ -62,7 +62,7 @@ export function summarize(r: RunReport): string {
 
   if (audit && survivors.length) {
     lines.push(
-      `Next step: add test cases to ${r.sourceFile.replace(/\.ts$/, '.test.ts')} that fail under each surviving mutation (often a boundary value), then call this tool again to re-check. ` +
+      `Next step: add test cases to ${r.baselineTests[0] ?? r.sourceFile.replace(/\.ts$/, '.test.ts')} that fail under each surviving mutation (often a boundary value), then call this tool again to re-check. ` +
         'An equivalent mutation (same behavior as the original) cannot be detected by any test. ' +
         'Write plain test() or it() calls with string titles and expect(); TestForge cannot run .each/.only/.skip, hooks, vi or snapshots.',
     );

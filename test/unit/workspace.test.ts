@@ -88,14 +88,15 @@ describe('execution copies', () => {
     fs.writeFileSync(path.join(project, 'node_modules', 'vitest', 'package.json'), '{"version":"5.0.2"}');
     fs.writeFileSync(path.join(project, 'package.json'), '{"type":"module"}');
     const run = createRunDir('c', dir);
-    const copy = createCopy(run, 'original', project, [{ rel: 'src/a.ts', text: 'export const a = 1;\n' }, { rel: 'src/a.test.ts', text: '' }], ['src/a.test.ts']);
+    const copy = createCopy(run, 'original', project, [{ rel: 'src/a.ts', text: 'export const a = 1;\n' }, { rel: 'src/a.test.ts', text: '' }], ['src/a.test.ts'], ['node']);
     expect(fs.readFileSync(path.join(copy, 'src/a.ts'), 'utf8')).toBe('export const a = 1;\n');
     expect(fs.lstatSync(path.join(copy, 'node_modules')).isSymbolicLink()).toBe(true);
     const tsconfig = JSON.parse(fs.readFileSync(path.join(copy, 'tsconfig.testforge.json'), 'utf8'));
     expect(tsconfig.files).toEqual(['src/a.ts', 'src/a.test.ts']);
+    expect(tsconfig.compilerOptions.types).toEqual(['node']);
     expect(fs.readFileSync(path.join(copy, 'vitest.testforge.config.mjs'), 'utf8')).toContain('"allowOnly": false');
     expect(() => writeFile(copy, '../escape.ts', 'x')).toThrow(TestForgeError);
-    expect(() => createCopy(run, 'evil', project, [{ rel: '../../x.ts', text: '' }], [])).toThrow(/escapes the run directory/);
+    expect(() => createCopy(run, 'evil', project, [{ rel: '../../x.ts', text: '' }], [], [])).toThrow(/escapes the run directory/);
     expect(removeRunDir(run.root)).toBe(true);
     // The link was removed, not its target or anything in it.
     expect(fs.readFileSync(path.join(project, 'node_modules', 'vitest', 'package.json'), 'utf8')).toBe('{"version":"5.0.2"}');

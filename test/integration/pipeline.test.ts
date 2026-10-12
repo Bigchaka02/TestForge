@@ -187,7 +187,7 @@ describe('pipeline on fixtures/sample', () => {
     expect(report.baselineTests).toEqual([]);
     expect(report.baselineRuns).toEqual([]);
     expect(report.contextFiles).toEqual(['src/clamp.ts', 'src/limits.ts']);
-    expect(report.limitations.join('\n')).toMatch(/No baseline tests/);
+    expect(report.limitations.join('\n')).toMatch(/No existing tests of the module were found/);
     expect(report.scores.comparison).toBeUndefined();
     expect(report.scores.baseline).toBeUndefined();
     expect(report.scores.generated).toBeDefined();
@@ -379,7 +379,7 @@ describe('pipeline on fixtures/sample', () => {
   test('audit: clamp has no adjacent tests — unsupported with a clear reason, nothing runs', async () => {
     const { report } = await run('clamp.ts', 'clamp', { mode: 'audit' });
     expect(report.status).toBe('unsupported');
-    expect(report.failure).toMatchObject({ kind: 'unsupported', message: 'There are no existing tests next to src/clamp.ts to audit. Add src/clamp.test.ts or use Generate & Verify Tests.' });
+    expect(report.failure).toMatchObject({ kind: 'unsupported', message: 'No existing tests of src/clamp.ts were found to audit (next to it, in __tests__/, or under test/ or tests/). Add src/clamp.test.ts or use Generate & Verify Tests.' });
     expect(report.modelRequests).toBe(0);
     expect(report.baselineRuns).toEqual([]);
     expect(report.mutations).toEqual([]);

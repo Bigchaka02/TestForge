@@ -100,7 +100,8 @@ export function applyMutation(text: string, m: Mutation): string {
 
 /**
  * Classifies one suite's outcome for a mutant run.
- * `suiteTests` are the test identities (file::title) of the suite that passed on original code.
+ * `suiteTests` are the test identities (file::title) of the suite's run on the original code.
+ * Skipped and todo tests are part of the suite but never fail, so they never detect a mutation.
  */
 export function classify(run: SuiteRun, suiteTests: Set<string>): { outcome: MutationOutcome; detecting: string[]; note?: string } {
   if (run.status === 'cancelled') return { outcome: 'not-run', detecting: [] };

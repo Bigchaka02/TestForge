@@ -82,8 +82,9 @@ function safeJoin(root: string, rel: string): string {
 /**
  * Creates one execution copy: files at their relative paths, package.json, a
  * node_modules link to the target's installed dependencies, and our own configs.
+ * `types` is the tsconfig "types" list (["node"] when the files import node: built-ins).
  */
-export function createCopy(run: RunDir, name: string, projectRoot: string, files: { rel: string; text: string }[], testFiles: string[]): string {
+export function createCopy(run: RunDir, name: string, projectRoot: string, files: { rel: string; text: string }[], testFiles: string[], types: string[]): string {
   const dir = safeJoin(run.root, name);
   fs.mkdirSync(dir);
   for (const f of files) {
@@ -98,12 +99,12 @@ export function createCopy(run: RunDir, name: string, projectRoot: string, files
   } catch (e) {
     throw new TestForgeError('setup', 'Could not link the project node_modules into the execution copy. TestForge does not install dependencies as a fallback.', String(e));
   }
-  writeConfigs(dir, files.map((f) => f.rel).filter((r) => !testFiles.includes(r)), testFiles);
+  writeConfigs(dir, files.map((f) => f.rel).filter((r) => !testFiles.includes(r)), testFiles, types);
   return dir;
 }
 
 /** (Re)writes the extension-owned configs for the given test file list. */
-export function writeConfigs(dir: string, sources: string[], testFiles: string[]): void {
+export function writeConfigs(dir: string, sources: string[], testFiles: string[], types: string[]): void {
   const vitest = {
     test: {
       root: dir,
@@ -126,7 +127,7 @@ export function writeConfigs(dir: string, sources: string[], testFiles: string[]
   };
   fs.writeFileSync(path.join(dir, 'vitest.testforge.config.mjs'), `export default ${JSON.stringify(vitest, null, 2)};\n`);
   const tsconfig = {
-    compilerOptions: { strict: true, noEmit: true, module: 'nodenext', moduleResolution: 'nodenext', target: 'es2022', skipLibCheck: true, types: [] },
+    compilerOptions: { strict: true, noEmit: true, module: 'nodenext', moduleResolution: 'nodenext', target: 'es2022', skipLibCheck: true, types },
     files: [...sources, ...testFiles],
   };
   fs.writeFileSync(path.join(dir, 'tsconfig.testforge.json'), JSON.stringify(tsconfig, null, 2));

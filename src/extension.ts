@@ -87,7 +87,7 @@ async function ensureConsent(provider: ModelProvider | undefined, files: string[
   const mode = provider ? 'DEMO' : 'Audit';
   const send = !sends
     ? `${mode} mode: nothing is sent to any model. This permission covers both Run Demo and Audit Existing Tests.\n\nTestForge uses these files:\n${files.join('\n')}`
-    : `TestForge will send ${files.length} file(s) to ${sends.label}:\n${files.join('\n')}\n\nOnly the selected module, its relative imports and its adjacent tests are sent, in up to ${LIMITS.maxModelRequests} requests (a correction retry and an improvement request for missed changes).`;
+    : `TestForge will send ${files.length} file(s) to ${sends.label}:\n${files.join('\n')}\n\nOnly the selected module, its relative imports and its existing tests are sent, in up to ${LIMITS.maxModelRequests} requests (a correction retry and an improvement request for missed changes).`;
   const detail = `${send}\n\nIt will also run your project's TypeScript compiler and Vitest on temporary copies of these files. This runs your code as you. Temporary copies are NOT a security sandbox.`;
   for (;;) {
     const pick = await vscode.window.showWarningMessage('Allow TestForge for this workspace?', { modal: true, detail }, 'Allow', 'Show Outgoing Context');
@@ -488,9 +488,9 @@ async function openReport(): Promise<void> {
 class LensProvider implements vscode.CodeLensProvider {
   provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
     if (doc.uri.scheme !== 'file' || /\.(test|spec|d)\.ts$/.test(doc.fileName)) return [];
-    let audit = false; // only modules with adjacent tests can be audited
+    let audit = false; // only modules with existing tests can be audited
     try {
-      audit = adjacentTestNames(doc.fileName).length > 0;
+      audit = adjacentTestNames(doc.fileName, vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.fsPath).length > 0;
     } catch {
       // folder not readable: no audit lens
     }

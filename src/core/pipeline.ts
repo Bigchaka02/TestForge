@@ -27,7 +27,7 @@ interface PipelineOptions {
   improve?: boolean;
 }
 
-/** Generate (the default) asks `provider` for cases. Audit mutation-checks the existing adjacent tests with no model. */
+/** Generate (the default) asks `provider` for cases. Audit mutation-checks the existing tests with no model. */
 export type RunMode = { mode?: 'generate'; provider: ModelProvider } | { mode: 'audit'; provider?: undefined };
 
 export type PipelineInput = PipelineOptions & RunMode;
@@ -59,7 +59,7 @@ const STATUS_FOR: Record<TestForgeError['kind'], TerminalStatus> = {
 export function preflight(root: string, sourceAbs: string, exportName: string, mode: RunMode['mode']): TargetAnalysis {
   const a = analyzeTarget(root, sourceAbs, exportName);
   if (mode === 'audit' && !a.baselineTests.length) {
-    throw new TestForgeError('unsupported', `There are no existing tests next to ${a.sourceRel} to audit. Add ${a.sourceRel.replace(/\.ts$/, '.test.ts')} or use Generate & Verify Tests.`);
+    throw new TestForgeError('unsupported', `No existing tests of ${a.sourceRel} were found to audit (next to it, in __tests__/, or under test/ or tests/). Add ${a.sourceRel.replace(/\.ts$/, '.test.ts')} or use Generate & Verify Tests.`);
   }
   return a;
 }
@@ -145,7 +145,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     report.toolVersions.node = node.version;
     const tools = resolveTools(input.root, node.path);
     const sources = a.files.filter((f) => f.role === 'source').map((f) => f.rel);
-    const copy = createCopy(run, 'original', input.root, a.files, a.baselineTests);
+    const copy = createCopy(run, 'original', input.root, a.files, a.baselineTests, a.types);
 
     // Stage 3: original must type-check
     const tc = await typeCheck(tools, copy, run.tmp, sig);
@@ -172,7 +172,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
       if (!sameResults(runs[0], runs[1])) throw new TestForgeError('unstable', 'Existing tests gave different results on two runs; scoring stopped.');
       baselineIds = new Set(runs[0].tests.map((t) => id(t.file, t.title)));
     } else {
-      report.limitations.push('No baseline tests were found next to the module, so there is no before/after comparison.');
+      report.limitations.push('No existing tests of the module were found (next to it, in __tests__/, or under test/ or tests/), so there is no before/after comparison.');
     }
 
     // Audit: no model request and no generated file. Each sampled mutant faces the existing tests alone.
@@ -257,7 +257,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     stage('validating-candidates', 'Running generated tests against the original code');
     const allTests = [...a.baselineTests, genRel];
     writeFile(copy, genRel, report.generatedTest);
-    writeConfigs(copy, sources, allTests);
+    writeConfigs(copy, sources, allTests, a.types);
     const tc2 = await typeCheck(tools, copy, run.tmp, sig);
     checkAbort();
     if (!tc2.ok) throw new TestForgeError('infrastructure', 'The generated test file did not type-check (a TestForge rendering problem, not your code).', tc2.output);
@@ -312,7 +312,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
         c.originalOutcome = !t ? 'not-run' : t.timedOut ? 'timeout' : t.status === 'passed' ? 'passed' : 'failed';
         if (t?.message) c.failureMessage = t.message;
       }
-      const ok = runs.length === 2 && runs.every((r) => r.status === 'completed') && sameResults(runs[0], runs[1]) && runs[0].tests.every((t) => t.status === 'passed');
+      const ok = runs.length === 2 && runs.every((r) => r.status === 'completed') && sameResults(runs[0], runs[1]) && runs[0].tests.every((t) => t.status !== 'failed');
       if (ok) return new Set(runs[0].tests.map((t) => id(t.file, t.title)));
       for (const c of added) Object.assign(c, { status: 'rejected', rejectReason: c.originalOutcome === 'passed' ? 'dropped with the other improvement cases' : `${c.originalOutcome} against the original code in the improvement pass` });
       return undefined;

@@ -72,7 +72,7 @@ describe('chat tool summary', () => {
       report({
         mode: 'audit',
         model: 'none (audit only)',
-        baselineTests: ['isEligible > adult', 'isEligible > child'],
+        baselineTests: ['test/age.test.ts'],
         mutations: [
           mutation('>=', '>', { baseline: 'survived' }),
           mutation('18', '19', { baseline: 'survived' }),
@@ -83,12 +83,12 @@ describe('chat tool summary', () => {
       }),
     );
     expect(text.split('\n')[0]).toBe('TestForge audit of isEligible in src/age.ts: COMPLETED. No AI model was used and no file was changed.');
-    expect(text).toContain('Existing tests: isEligible > adult, isEligible > child');
+    expect(text).toContain('Existing tests: test/age.test.ts');
     expect(text).toContain('Mutation score of the existing tests: 1/3 detected, 1 excluded.');
     expect(text).toContain('Surviving mutations (no test fails when the code is changed this way):\n- line 2: >= → >\n- line 2: 18 → 19\n');
     expect(text).toContain('Detected mutations:\n- line 2: age >= 18 → true (by: isEligible > child)');
     expect(text).toContain('Not scored:\n- line 2: age >= 18 → false: TIMEOUT (Timed out)');
-    expect(text).toContain('Next step: add test cases to src/age.test.ts that fail under each surviving mutation');
+    expect(text).toContain('Next step: add test cases to test/age.test.ts that fail under each surviving mutation');
     expect(text).not.toMatch(/Model:|generated tests|NOT applied/);
   });
 

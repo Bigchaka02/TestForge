@@ -1,0 +1,9 @@
+{
+  "name": "tiny-slug",
+  "version": "1.0.0",
+  "description": "Local package for the TestForge realistic fixture (installed through a file: dependency).",
+  "license": "MIT",
+  "type": "module",
+  "types": "./index.d.ts",
+  "exports": { ".": { "types": "./index.d.ts", "default": "./index.js" } }
+}
