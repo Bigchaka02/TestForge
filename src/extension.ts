@@ -15,6 +15,7 @@ import { FakeProvider } from './providers/fake';
 import type { ModelProvider } from './providers/provider';
 import { modelLabel, VsCodeLmProvider } from './providers/vscodeLm';
 import { applyGenerated, pruneHistory, staleReasons, StoredRun } from './storage/apply';
+import { EditorInsights } from './ui/insights';
 import { ResultsProvider } from './ui/results';
 
 const HISTORY_KEY = 'testforge.history';
@@ -24,6 +25,7 @@ const PREVIEW_SCHEME = 'testforge-preview';
 let ctx: vscode.ExtensionContext;
 let output: vscode.OutputChannel;
 let results: ResultsProvider;
+let insights: EditorInsights;
 const mutex = new KeyedMutex();
 const active = new Map<string, AbortController>();
 const previews = new Map<string, string>();
@@ -45,7 +47,9 @@ function dirtyPaths(): string[] {
 }
 
 function showRun(run: StoredRun | undefined): void {
-  results.show(run, run ? staleReasons(run, dirtyPaths()) : []);
+  const stale = run ? staleReasons(run, dirtyPaths()) : [];
+  results.show(run, stale);
+  insights.show(run, stale);
 }
 
 // ---------- guards ----------
@@ -341,9 +345,10 @@ export function activate(context: vscode.ExtensionContext): { lastReport(): RunR
   ctx = context;
   output = vscode.window.createOutputChannel('TestForge');
   results = new ResultsProvider();
+  insights = new EditorInsights(context.extensionUri, () => results.current() && showRun(results.current()));
   previewEmitter = new vscode.EventEmitter<vscode.Uri>();
   const latest = pruneHistory(history())[0];
-  if (latest) results.show(latest, []);
+  if (latest) showRun(latest);
 
   try {
     const removed = cleanupStale();
@@ -356,6 +361,7 @@ export function activate(context: vscode.ExtensionContext): { lastReport(): RunR
   context.subscriptions.push(
     output,
     previewEmitter,
+    insights,
     vscode.window.registerTreeDataProvider('testforge.results', results),
     vscode.workspace.registerTextDocumentContentProvider(PREVIEW_SCHEME, { onDidChange: previewEmitter.event, provideTextDocumentContent: (u) => previews.get(u.toString()) ?? '' }),
     vscode.languages.registerCodeLensProvider({ language: 'typescript', scheme: 'file' }, new LensProvider()),
