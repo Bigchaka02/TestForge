@@ -137,7 +137,10 @@ export interface Tools {
 /** Resolves CLI entry points from the target's installed package metadata. */
 export function resolveTools(projectRoot: string, node: string): Tools {
   const bin = (pkg: string, name: string) => {
-    const dir = path.join(projectRoot, 'node_modules', pkg);
+    // Native real path, as Vite resolves the test files' imports. VS Code reports Windows drive letters in
+    // lower case ("d:\"); a CLI started from that spelling and imports resolved to "D:\" are two module
+    // instances, and Vitest fails with "failed to find the current suite".
+    const dir = fs.realpathSync.native(path.join(projectRoot, 'node_modules', pkg));
     const meta = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) as { bin?: string | Record<string, string> };
     const rel = typeof meta.bin === 'string' ? meta.bin : meta.bin?.[name];
     if (!rel) throw new TestForgeError('setup', `${pkg} does not declare a "${name}" executable.`);

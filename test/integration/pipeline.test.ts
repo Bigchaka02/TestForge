@@ -138,6 +138,15 @@ describe('pipeline on fixtures/sample', () => {
     expect(report.inputHashes['src/age.ts']).toBe(before['age.ts']);
   });
 
+  // VS Code reports "d:\..." while Node and Vite use "D:\..."; mixing them loaded two copies of vitest.
+  test.runIf(process.platform === 'win32')('a lower-case drive letter, as VS Code reports it, still runs', async () => {
+    const lower = (p: string) => p.replace(/^[A-Z]:/, (d) => d.toLowerCase());
+    expect(lower(ROOT)).not.toBe(ROOT);
+    const { report } = await run('age.ts', 'isEligible', { root: lower(ROOT), sourceAbs: lower(path.join(SRC, 'age.ts')) });
+    expect(report.failure).toBeUndefined();
+    expect(report.status).toBe('completed');
+  });
+
   test('A07: finalPrice — documented "exactly 100 costs 90" fails on buggy code and is kept', async () => {
     const { report } = await run('discount.ts', 'finalPrice');
     expect(report.status).toBe('partial');

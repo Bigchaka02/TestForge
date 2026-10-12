@@ -76,7 +76,8 @@ export function createCopy(run: RunDir, name: string, projectRoot: string, files
   }
   fs.copyFileSync(path.join(projectRoot, 'package.json'), path.join(dir, 'package.json'));
   try {
-    fs.symlinkSync(path.join(projectRoot, 'node_modules'), path.join(dir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    // Link the native real path (see resolveTools): a lower-case Windows drive letter from VS Code would load a second copy of vitest.
+    fs.symlinkSync(fs.realpathSync.native(path.join(projectRoot, 'node_modules')), path.join(dir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   } catch (e) {
     throw new TestForgeError('setup', 'Could not link the project node_modules into the execution copy. TestForge does not install dependencies as a fallback.', String(e));
   }
