@@ -2,7 +2,7 @@
   "name": "testforge",
   "displayName": "TestForge",
   "description": "Generate runnable Vitest tests for TypeScript functions and check which code changes they detect.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "testforge-dev",
   "license": "MIT",
   "private": true,
