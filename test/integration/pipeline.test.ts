@@ -263,7 +263,7 @@ describe('pipeline on fixtures/sample', () => {
   });
 
   test('hostile case titles render into tests that run and pass', async () => {
-    const titles = ['quote \' " and `backtick` ${x}', 'closes */ comment', 'new\nline', 'sep arator', "'); process.exit(1); ('"];
+    const titles = ['quote \' " and `backtick` ${x}', 'closes */ comment', 'new\nline', 'sep\u2028arator', "'); process.exit(1); ('"];
     const provider = new FakeProvider(() => plan('joinWords', titles.map((t, i) => inferred(t, [[t, String(i)]], `${t} ${i}`))));
     const { report } = await run('strings.ts', 'joinWords', { provider });
     expect(report.status).toBe('completed');
