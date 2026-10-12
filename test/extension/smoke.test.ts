@@ -21,6 +21,15 @@ function ageUri(): vscode.Uri {
   return vscode.Uri.file(path.join(workspaceRoot(), 'src', 'age.ts'));
 }
 
+function discountUri(): vscode.Uri {
+  return vscode.Uri.file(path.join(workspaceRoot(), 'src', 'discount.ts'));
+}
+
+/** Possible-bug warnings from TestForge's editor insights. */
+function testforgeDiagnostics(uri: vscode.Uri): vscode.Diagnostic[] {
+  return vscode.languages.getDiagnostics(uri).filter((d) => d.source === 'TestForge');
+}
+
 async function waitFor<T>(what: string, probe: () => Promise<T | undefined> | T | undefined, timeoutMs = 30_000): Promise<T> {
   const start = Date.now();
   for (;;) {
@@ -96,8 +105,66 @@ describe('TestForge extension (smoke)', () => {
     }
     const report = await waitFor('a RunReport from runDemo', () => api.lastReport() ?? undefined, 180_000);
     assert.equal(typeof report, 'object');
-    const r = report as { schemaVersion?: unknown; status?: unknown };
+    const r = report as { schemaVersion?: unknown; status?: unknown; failure?: unknown };
     assert.equal(r.schemaVersion, 1);
     assert.equal(typeof r.status, 'string');
+
+    // Editor insights: a score CodeLens above isEligible, and no possible-bug warning for age.ts.
+    assert.equal(r.status, 'completed', `the demo run ended ${String(r.status)}: ${JSON.stringify(r.failure)}`);
+    const score = await waitFor('the TestForge score CodeLens on isEligible', async () => {
+      const lenses = (await vscode.commands.executeCommand<vscode.CodeLens[]>('vscode.executeCodeLensProvider', ageUri(), 100)) ?? [];
+      return lenses.find((l) => l.command?.command === 'testforge.results.focus');
+    });
+    assert.equal(score.range.start.line, fnLine);
+    assert.match(score.command?.title ?? '', /^TestForge: existing tests catch 1\/3 changes → 3\/3 with generated tests/);
+    assert.deepEqual(testforgeDiagnostics(ageUri()), []);
+  });
+
+  it('runDemo on finalPrice warns about the documented case the code fails', async () => {
+    const api = await getExtension().activate();
+    const uri = discountUri();
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+    // The same arguments the CodeLens above finalPrice passes.
+    await vscode.commands.executeCommand('testforge.runDemo', uri, 'finalPrice');
+    const r = api?.lastReport() as { status?: unknown; failure?: unknown } | undefined;
+    assert.equal(r?.status, 'partial', `the demo run ended ${String(r?.status)}: ${JSON.stringify(r?.failure)}`);
+
+    const found = await waitFor('a possible-bug diagnostic on discount.ts', () => {
+      const ds = testforgeDiagnostics(uri);
+      return ds.length ? ds : undefined;
+    });
+    assert.equal(found.length, 1);
+    const [bug] = found;
+    assert.equal(bug.severity, vscode.DiagnosticSeverity.Warning);
+    assert.match(bug.message, /^Possible bug \(DEMO\): "member order of exactly 100 costs 90" is documented \(src\/discount\.ts:3\) but fails against the code: /);
+    assert.equal(bug.range.start.line, 4, 'expected the warning on the declaration of finalPrice');
+    const evidence = bug.relatedInformation?.[0]?.location;
+    assert.equal(evidence?.uri.toString(), uri.toString());
+    assert.equal(evidence?.range.start.line, 2, 'expected the related information on the documented requirement');
+  });
+
+  it('hides the warning while discount.ts is dirty or editor insights are off', async () => {
+    const uri = discountUri();
+    const editor = await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+    assert.equal(testforgeDiagnostics(uri).length, 1, 'expected the warning from the finalPrice demo run');
+
+    // Unsaved changes make the run stale; reverting them makes it fresh again. Nothing is saved.
+    assert.ok(await editor.edit((b) => b.insert(new vscode.Position(0, 0), ' ')));
+    try {
+      await waitFor('the warning to disappear while discount.ts is dirty', () => (testforgeDiagnostics(uri).length === 0 ? true : undefined));
+    } finally {
+      await vscode.commands.executeCommand('workbench.action.files.revert');
+    }
+    await waitFor('the warning to return after the revert', () => (testforgeDiagnostics(uri).length === 1 ? true : undefined));
+
+    // User settings of the test profile, not the fixture workspace.
+    const config = vscode.workspace.getConfiguration('testforge');
+    await config.update('editorInsights', false, vscode.ConfigurationTarget.Global);
+    try {
+      await waitFor('the warning to disappear with editorInsights off', () => (testforgeDiagnostics(uri).length === 0 ? true : undefined));
+    } finally {
+      await config.update('editorInsights', undefined, vscode.ConfigurationTarget.Global);
+    }
+    await waitFor('the warning to return with editorInsights on', () => (testforgeDiagnostics(uri).length === 1 ? true : undefined));
   });
 });

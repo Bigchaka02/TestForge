@@ -129,6 +129,11 @@
           "maximum": 600,
           "description": "Overall run deadline."
         },
+        "testforge.editorInsights": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the latest run in the editor: gutter markers on lines whose changes the tests detect or miss, a score CodeLens and possible-bug warnings. Hidden while the run is stale."
+        },
         "testforge.requirementsFile": {
           "type": "string",
           "default": "",
