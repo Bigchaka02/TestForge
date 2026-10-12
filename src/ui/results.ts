@@ -64,6 +64,7 @@ export class ResultsProvider implements vscode.TreeDataProvider<Node> {
     if (this.stale.length) runNodes.push({ label: 'STALE: Apply is disabled', description: this.stale.join('; '), tooltip: this.stale.join('\n'), icon: 'history' });
     if (run.appliedHash) runNodes.push({ label: `Applied: ${r.generatedTestPath}`, icon: 'check' });
     if (r.generatedTest) runNodes.push({ label: 'Preview generated test file', icon: 'eye', command: { title: 'Preview', command: 'testforge.previewTests' } });
+    runNodes.push({ label: 'Copy test proof for a pull request', description: 'Markdown', icon: 'copy', command: { title: 'Copy proof', command: 'testforge.copyProof' } });
     if (r.cleanup !== 'done') runNodes.push({ label: `Cleanup: ${r.cleanup.toUpperCase()}`, icon: 'warning' });
 
     const caseNodes: Node[] = r.cases.map((c) => {

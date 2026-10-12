@@ -14,6 +14,7 @@ import { applyMutation } from './mutation/mutate';
 import { FakeProvider } from './providers/fake';
 import type { ModelProvider } from './providers/provider';
 import { modelLabel, VsCodeLmProvider } from './providers/vscodeLm';
+import { proofMarkdown } from './report/markdown';
 import { applyGenerated, pruneHistory, staleReasons, StoredRun } from './storage/apply';
 import { EditorInsights } from './ui/insights';
 import { ResultsProvider } from './ui/results';
@@ -315,6 +316,19 @@ async function clearHistory(): Promise<void> {
   showRun(undefined);
 }
 
+/** Copies the selected run as Markdown for a pull request; returns the text (used by tests). */
+async function copyProof(): Promise<string | undefined> {
+  const run = results.current();
+  if (!run) {
+    void vscode.window.showInformationMessage('No TestForge run is selected.');
+    return undefined;
+  }
+  const md = proofMarkdown(run.report, staleReasons(run, dirtyPaths()));
+  await vscode.env.clipboard.writeText(md);
+  void vscode.window.showInformationMessage('Copied the TestForge proof as Markdown. Paste it into a pull request or review.');
+  return md;
+}
+
 async function openReport(): Promise<void> {
   const runs = pruneHistory(history());
   if (!runs.length) {
@@ -375,6 +389,7 @@ export function activate(context: vscode.ExtensionContext): { lastReport(): RunR
       for (const a of active.values()) a.abort();
     }),
     cmd('testforge.openReport', openReport),
+    cmd('testforge.copyProof', copyProof),
     cmd('testforge.previewTests', previewTests),
     cmd('testforge.applyTests', () => apply(false)),
     cmd('testforge.applyFailingCandidate', () => apply(true)),

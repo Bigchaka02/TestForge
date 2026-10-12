@@ -49,6 +49,11 @@
         "category": "TestForge"
       },
       {
+        "command": "testforge.copyProof",
+        "title": "Copy Test Proof (Markdown)",
+        "category": "TestForge"
+      },
+      {
         "command": "testforge.previewTests",
         "title": "Preview Generated Tests",
         "category": "TestForge"
@@ -103,6 +108,11 @@
           "command": "testforge.discardRun",
           "when": "view == testforge.results",
           "group": "navigation@3"
+        },
+        {
+          "command": "testforge.copyProof",
+          "when": "view == testforge.results",
+          "group": "1_proof@1"
         }
       ]
     },

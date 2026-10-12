@@ -87,6 +87,12 @@ describe('proofMarkdown', () => {
     expect(md).not.toContain('Cases:');
   });
 
+  test('stale runs say so, with escaped reasons', () => {
+    const md = proofMarkdown(report(), ['src/age.ts changed', 'new test file src/a_b.test.ts']);
+    expect(md).toContain('> STALE: src/age.ts changed; new test file src/a\\_b.test.ts. These results may not match the current code.');
+    expect(proofMarkdown(report())).not.toContain('STALE');
+  });
+
   test('failed runs say why and show no scores', () => {
     const md = proofMarkdown(report({ status: 'failed', failure: { kind: 'baseline-failure', message: 'Pre-existing test failure: x' }, mutations: [], scores: {} }));
     expect(md).toContain('Run ended **FAILED**: Pre-existing test failure: x');
@@ -114,5 +120,10 @@ describe('helpers', () => {
   test('mdText is one escaped line', () => {
     expect(mdText('a\nb*c_')).toBe('a b\\*c\\_');
     expect(mdText('x'.repeat(300), 10)).toBe('x'.repeat(10));
+  });
+
+  test('hidden and bidi characters cannot reorder text', () => {
+    expect(mdText('a\u202eb\u2066\u200bc')).toBe('a b c');
+    expect(mdCode('x\u2028y\u202dz')).toBe('`x y z`');
   });
 });

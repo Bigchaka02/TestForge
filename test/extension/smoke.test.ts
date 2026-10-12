@@ -167,4 +167,13 @@ describe('TestForge extension (smoke)', () => {
     }
     await waitFor('the warning to return with editorInsights on', () => (testforgeDiagnostics(uri).length === 1 ? true : undefined));
   });
+
+  it('copies the finalPrice run to the clipboard as a Markdown proof', async () => {
+    const md = await vscode.commands.executeCommand<string | undefined>('testforge.copyProof');
+    assert.ok(md, 'expected copyProof to return the Markdown it copied');
+    assert.equal(await vscode.env.clipboard.readText(), md);
+    assert.match(md, /^### TestForge proof: `finalPrice` in `src\/discount\.ts`\n\n> DEMO run/);
+    assert.match(md, /\*\*Possible bugs\*\*[^\n]*\n- member order of exactly 100 costs 90: /);
+    assert.doesNotMatch(md, /STALE/);
+  });
 });

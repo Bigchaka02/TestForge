@@ -4,17 +4,20 @@ import type { MutationOutcome, RunReport, SuiteScore } from '../core/types';
 
 const WORD: Record<MutationOutcome, string> = { killed: 'detected', survived: '**missed**', invalid: 'invalid', timeout: 'timeout', error: 'error', 'not-run': 'not run' };
 
+// Control, invisible and bidi characters: they can hide or reorder text in a review (Trojan Source).
+const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]+/g;
+
 /** Plain text safe in a Markdown table cell or list item: one line, no HTML, no table breaks. */
 export const mdText = (s: string, max = 200) =>
   s
-    .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ')
+    .replace(HIDDEN, ' ')
     .slice(0, max)
     .replace(/[\\`*_[\]<>|#~!]/g, (c) => `\\${c}`);
 
 /** Inline code span that survives backticks and pipes inside table cells. */
 export function mdCode(s: string): string {
   if (!s) return '(removed)';
-  const one = s.replace(/[\r\n]+/g, ' ').replace(/\|/g, '\\|');
+  const one = s.replace(HIDDEN, ' ').replace(/\|/g, '\\|');
   const longest = Math.max(0, ...(one.match(/`+/g) ?? []).map((r) => r.length));
   const fence = '`'.repeat(longest + 1);
   const pad = one.startsWith('`') || one.endsWith('`') ? ' ' : '';
@@ -23,12 +26,14 @@ export function mdCode(s: string): string {
 
 const ratio = (s?: SuiteScore) => (!s ? 'n/a' : s.rate === null ? 'N/A (no valid mutations)' : `${s.killed} / ${s.killed + s.survived}`);
 
-export function proofMarkdown(report: RunReport): string {
+/** `stale`: why the run may no longer match the code (relative paths, from staleReasons). */
+export function proofMarkdown(report: RunReport, stale: string[] = []): string {
   const r = report;
   const auditOnly = !r.scores.generated && !!r.scores.baseline;
   const out: string[] = [];
   out.push(`### TestForge proof: ${mdCode(r.exportName)} in ${mdCode(r.sourceFile)}`);
   if (r.demo) out.push('', '> DEMO run: cases came from a deterministic fake model, not an AI model.');
+  if (stale.length) out.push('', `> STALE: ${stale.map((s) => mdText(s, 120)).join('; ')}. These results may not match the current code.`);
   out.push('');
 
   if (r.failure) {
