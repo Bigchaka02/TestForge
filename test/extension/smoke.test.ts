@@ -125,7 +125,8 @@ describe('TestForge extension (smoke)', () => {
     const uri = discountUri();
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
     // The same arguments the CodeLens above finalPrice passes.
-    await vscode.commands.executeCommand('testforge.runDemo', uri, 'finalPrice');
+    const returned = await vscode.commands.executeCommand<unknown>('testforge.runDemo', uri, 'finalPrice');
+    assert.ok(returned, 'runDemo on finalPrice did not start a run; the [TestForge] log lines above say why');
     const r = api?.lastReport() as { status?: unknown; failure?: unknown } | undefined;
     assert.equal(r?.status, 'partial', `the demo run ended ${String(r?.status)}: ${JSON.stringify(r?.failure)}`);
 

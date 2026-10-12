@@ -55,9 +55,22 @@ function showRun(run: StoredRun | undefined): void {
 
 // ---------- guards ----------
 
+/** Output channel line. Extension-host tests also print it, so CI logs say why a run did not start. */
+function log(line: string): void {
+  output.appendLine(line);
+  if (ctx.extensionMode === vscode.ExtensionMode.Test) console.log(`[TestForge] ${line}`);
+}
+
+/** Shows why a run did not start, and logs it. */
+function notStarted(message: string, level: 'error' | 'warning' = 'error'): undefined {
+  log(`Not started: ${message}`);
+  void (level === 'error' ? vscode.window.showErrorMessage(message) : vscode.window.showWarningMessage(message));
+  return undefined;
+}
+
 function requireTrust(): boolean {
   if (vscode.workspace.isTrusted) return true;
-  void vscode.window.showWarningMessage('TestForge needs a trusted workspace to analyze or run code. In Restricted Mode you can only open saved reports.');
+  notStarted('TestForge needs a trusted workspace to analyze or run code. In Restricted Mode you can only open saved reports.', 'warning');
   return false;
 }
 
@@ -113,17 +126,13 @@ async function currentModel(): Promise<vscode.LanguageModelChat | undefined> {
 async function resolveTarget(uri?: vscode.Uri, exportName?: string): Promise<{ uri: vscode.Uri; exportName: string } | undefined> {
   const editor = vscode.window.activeTextEditor;
   const doc = uri ? await vscode.workspace.openTextDocument(uri) : editor?.document;
-  if (!doc || doc.uri.scheme !== 'file' || doc.languageId !== 'typescript') {
-    void vscode.window.showErrorMessage('Open a saved TypeScript (.ts) file first. Other languages are not supported yet.');
-    return undefined;
-  }
+  if (!doc || doc.uri.scheme !== 'file' || doc.languageId !== 'typescript') return notStarted('Open a saved TypeScript (.ts) file first. Other languages are not supported yet.');
   if (exportName) return { uri: doc.uri, exportName };
   const exports = findExports(parse(doc.fileName, doc.getText()));
   const eligible = exports.filter((e) => e.eligible);
   if (!eligible.length) {
     const why = exports.map((e) => `${e.name}: ${e.reason}`).join('; ');
-    void vscode.window.showErrorMessage(`No eligible exported function in this file.${why ? ` ${why}` : ' Only named exported sync functions and const arrow functions are supported.'}`);
-    return undefined;
+    return notStarted(`No eligible exported function in this file.${why ? ` ${why}` : ' Only named exported sync functions and const arrow functions are supported.'}`);
   }
   if (editor && editor.document === doc) {
     const offset = doc.offsetAt(editor.selection.active);
@@ -142,13 +151,11 @@ async function generate(demo: boolean, uri?: vscode.Uri, exportName?: string): P
   const target = await resolveTarget(uri, exportName);
   if (!target) return undefined;
   const folder = vscode.workspace.getWorkspaceFolder(target.uri);
-  if (!folder || folder.uri.scheme !== 'file') {
-    void vscode.window.showErrorMessage('The file must be inside a local workspace folder.');
-    return undefined;
-  }
+  if (!folder || folder.uri.scheme !== 'file') return notStarted('The file must be inside a local workspace folder.');
   const root = folder.uri.fsPath;
   const release = mutex.tryAcquire(root);
   if (!release) {
+    log('Not started: a TestForge run is already active in this workspace.');
     const pick = await vscode.window.showWarningMessage('A TestForge run is already active in this workspace.', 'Cancel Active Run');
     if (pick) active.get(root)?.abort();
     return undefined;
@@ -159,18 +166,15 @@ async function generate(demo: boolean, uri?: vscode.Uri, exportName?: string): P
     try {
       analysis = analyzeTarget(root, target.uri.fsPath, target.exportName);
     } catch (e) {
-      if (e instanceof TestForgeError) {
-        void vscode.window.showErrorMessage(`TestForge cannot run: ${e.message}`);
-        return undefined;
-      }
+      if (e instanceof TestForgeError) return notStarted(`TestForge cannot run: ${e.message}`);
       throw e;
     }
     const relevant = new Set(analysis.files.map((f) => path.join(root, f.rel)));
     const dirty = vscode.workspace.textDocuments.filter((d) => d.isDirty && relevant.has(d.uri.fsPath));
     if (dirty.length) {
       const pick = await vscode.window.showWarningMessage(`${dirty.length} relevant file(s) have unsaved changes.`, { modal: true, detail: dirty.map((d) => vscode.workspace.asRelativePath(d.uri)).join('\n') }, 'Save and Continue');
-      if (pick !== 'Save and Continue') return undefined;
-      for (const d of dirty) if (!(await d.save())) return undefined;
+      if (pick !== 'Save and Continue') return void log('Not started: unsaved changes were not saved.');
+      for (const d of dirty) if (!(await d.save())) return notStarted(`Could not save ${vscode.workspace.asRelativePath(d.uri)}.`);
       analysis = analyzeTarget(root, target.uri.fsPath, target.exportName);
     }
 
@@ -178,16 +182,16 @@ async function generate(demo: boolean, uri?: vscode.Uri, exportName?: string): P
     if (demo) provider = new FakeProvider();
     else {
       const model = await currentModel();
-      if (!model) return undefined;
+      if (!model) return void log('Not started: no model selected.');
       provider = new VsCodeLmProvider(model);
     }
     const prompt = buildPrompt(analysis, evidenceFiles(analysis), { maxCases: 8, existingTitles: existingTitles(analysis) });
-    if (!(await ensureConsent(provider, analysis.files.map((f) => f.rel), prompt))) return undefined;
+    if (!(await ensureConsent(provider, analysis.files.map((f) => f.rel), prompt))) return void log('Not started: consent was not given.');
 
     const cfg = vscode.workspace.getConfiguration('testforge');
     const abort = new AbortController();
     active.set(root, abort);
-    output.appendLine(`[${new Date().toISOString()}] ${demo ? 'DEMO ' : ''}run for ${target.exportName} in ${vscode.workspace.asRelativePath(target.uri)} using ${provider.label}`);
+    log(`[${new Date().toISOString()}] ${demo ? 'DEMO ' : ''}run for ${target.exportName} in ${vscode.workspace.asRelativePath(target.uri)} using ${provider.label}`);
     const report = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `TestForge${demo ? ' (DEMO)' : ''}: ${target.exportName}`, cancellable: true },
       (progress, token) => {
@@ -203,7 +207,7 @@ async function generate(demo: boolean, uri?: vscode.Uri, exportName?: string): P
           signal: abort.signal,
           onStage: (stage, message) => {
             progress.report({ message });
-            output.appendLine(`  ${stage}: ${message}`);
+            log(`  ${stage}: ${message}`);
           },
         });
       },
@@ -211,7 +215,7 @@ async function generate(demo: boolean, uri?: vscode.Uri, exportName?: string): P
     const run: StoredRun = { report, root, savedAt: Date.now() };
     await saveRun(run);
     showRun(run);
-    output.appendLine(`  result: ${report.status}${report.failure ? ` (${report.failure.kind}: ${report.failure.message})` : ''}`);
+    log(`  result: ${report.status}${report.failure ? ` (${report.failure.kind}: ${report.failure.message})` : ''}`);
     void vscode.commands.executeCommand('testforge.results.focus');
     const summary = report.failure ? `${report.status.toUpperCase()}: ${report.failure.message}` : `${report.status.toUpperCase()}. See the TestForge Results view.`;
     if (report.status === 'completed') void vscode.window.showInformationMessage(`TestForge ${summary}`, 'Preview Tests').then((p) => p && previewTests());
