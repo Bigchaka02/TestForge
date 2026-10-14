@@ -9,6 +9,7 @@ export const LIMITS = {
   initialCases: 8,
   maxCases: 12,
   maxModelRequests: 3,
+  improvementCases: 4,
   modelDeadlineMs: 45_000,
   maxResponseBytes: 128 * 1024,
   defaultMutations: 8,
@@ -28,7 +29,7 @@ export const LIMITS = {
 
 export type Limits = { -readonly [K in keyof typeof LIMITS]: number };
 
-export const CONSENT_POLICY_VERSION = 1;
+export const CONSENT_POLICY_VERSION = 2;
 
 export type Stage =
   | 'idle'
@@ -133,13 +134,14 @@ export interface CaseRecord extends ProposedCase {
   rejectReason?: string;
   originalOutcome?: 'passed' | 'failed' | 'timeout' | 'not-run';
   failureMessage?: string;
+  round?: 'improvement'; // proposed by the improvement pass
 }
 
 export type MutationOutcome = 'killed' | 'survived' | 'invalid' | 'timeout' | 'error' | 'not-run';
 
 export interface Mutation {
   id: string;
-  family: 'relational-boundary' | 'strict-equality' | 'boolean-return';
+  family: 'relational-boundary' | 'literal-boundary' | 'strict-equality' | 'boolean-return' | 'arithmetic' | 'logical' | 'negation-removal' | 'if-condition';
   file: string; // relative path
   start: number;
   end: number;
@@ -173,6 +175,8 @@ export interface Comparison {
 export interface RunReport {
   schemaVersion: 1;
   runId: string;
+  /** Audit runs check the existing tests only (no model, no generated file). Reports saved without it are generate runs. */
+  mode?: 'generate' | 'audit';
   status: TerminalStatus;
   stage: Stage;
   demo: boolean;
@@ -198,6 +202,8 @@ export interface RunReport {
   mutations: MutationRecord[];
   scores: { baseline?: SuiteScore; generated?: SuiteScore; comparison?: Comparison };
   modelRequests: number;
+  /** Present when the improvement pass ran (some mutants survived the first suite). */
+  improvement?: { survivorsBefore: number; proposed: number; added: number; killed: number };
   limitations: string[];
   failure?: { kind: FailureKind; message: string; detail?: string };
   cleanup: 'done' | 'failed' | 'pending';

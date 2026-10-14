@@ -1,7 +1,8 @@
+import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 import { findExports, parse } from '../../src/analysis/analyze';
 import type { MutationOutcome, MutationRecord, SuiteRun, TestResult } from '../../src/core/types';
-import { applyMutation, classify, compare, enumerateMutations, score } from '../../src/mutation/mutate';
+import { applyMutation, classify, compare, describeMutation, enumerateMutations, sampleMutations, score } from '../../src/mutation/mutate';
 
 const SOURCE = `// a >= b in a comment
 export function other(x: number): boolean {
@@ -40,9 +41,14 @@ describe('enumerateMutations', () => {
     const m = muts('target');
     expect(m.map((x) => [x.family, x.original, x.replacement, x.line])).toEqual([
       ['relational-boundary', '>', '>=', 9], // inside the template substitution: real code
+      ['if-condition', 'a >= b && a !== 0', 'false', 17],
+      ['if-condition', 'a >= b && a !== 0', 'true', 17],
       ['relational-boundary', '>=', '>', 17],
+      ['logical', '&&', '||', 17],
       ['strict-equality', '!==', '===', 17],
       ['boolean-return', 'true', 'false', 18],
+      ['if-condition', "s === 'x'", 'false', 21],
+      ['if-condition', "s === 'x'", 'true', 21],
       ['strict-equality', '===', '!==', 21],
       ['boolean-return', 'false', 'true', 21],
       ['relational-boundary', '<', '<=', 22],
@@ -57,7 +63,7 @@ describe('enumerateMutations', () => {
   });
 
   test('handles expression-bodied arrows', () => {
-    expect(muts('arrow').map((x) => `${x.original}->${x.replacement}`)).toEqual(['<=-><']);
+    expect(muts('arrow').map((x) => `${x.original}->${x.replacement}`)).toEqual(['<=-><', '3->2', '3->4']);
     expect(muts('alwaysTrue').map((x) => `${x.original}->${x.replacement}`)).toEqual(['true->false']);
   });
 
@@ -83,6 +89,82 @@ describe('enumerateMutations', () => {
   });
 });
 
+describe('new operator families', () => {
+  const SRC = `export function f(a: number, b: number, s: string, ok: boolean): number {
+  const label = s + 'x';
+  const t = \`\${s}\` + s;
+  if (!ok || a % 2 === 0) return a * b - 1;
+  return a / b + 0 + (a > 10 ? 1 : 0);
+}
+`;
+  const f = parse('src/f.ts', SRC);
+  const all = enumerateMutations(f, findExports(f)[0].node, 'src/f.ts', 'h');
+  const pick = (family: string) => all.filter((x) => x.family === family).map((x) => `${x.original}->${x.replacement}`);
+
+  test('arithmetic, skipping string concatenation', () => {
+    expect(pick('arithmetic')).toEqual(['%->*', '*->/', '-->+', '/->*', '+->-', '+->-']);
+  });
+
+  test('logical, negation removal and if-condition', () => {
+    expect(pick('logical')).toEqual(['||->&&']);
+    expect(pick('negation-removal')).toEqual(['!->']);
+    expect(pick('if-condition')).toEqual(['!ok || a % 2 === 0->false', '!ok || a % 2 === 0->true']);
+  });
+
+  test('literal boundary only for integer bounds in comparisons', () => {
+    expect(pick('literal-boundary')).toEqual(['10->11', '10->9']);
+  });
+
+  test('every mutation applies cleanly to pristine text', () => {
+    for (const m of all) expect(applyMutation(SRC, m)).not.toBe(SRC);
+  });
+
+  test('a double negation gives one mutant, not two with the same program', () => {
+    const g = parse('src/g.ts', 'export function g(x: number): boolean {\n  return !!x;\n}\n');
+    const m = enumerateMutations(g, findExports(g)[0].node, 'src/g.ts', 'h');
+    expect(m.map((x) => `${x.family}:${x.original}->${x.replacement}`)).toEqual(['negation-removal:!->']);
+    expect(applyMutation(g.text, m[0])).toContain('return !x;');
+  });
+
+  test('a +/- replacement next to a unary sign stays a separate token', () => {
+    const text = 'export function h(a: number, b: number): number {\n  return (a+-b) * (a-+b) * (a+--b);\n}\n';
+    const h = parse('src/h.ts', text);
+    const m = enumerateMutations(h, findExports(h)[0].node, 'src/h.ts', 'h').filter((x) => x.family === 'arithmetic' && x.original !== '*');
+    expect(m).toHaveLength(3);
+    for (const x of m) {
+      const out = ts.transpileModule(applyMutation(text, x), { reportDiagnostics: true, compilerOptions: { module: ts.ModuleKind.ESNext } });
+      expect(out.diagnostics ?? []).toEqual([]);
+    }
+    expect(m.map((x) => applyMutation(text, x).split('\n')[1])).toEqual([
+      '  return (a- -b) * (a-+b) * (a+--b);',
+      '  return (a+-b) * (a+ +b) * (a+--b);',
+      '  return (a+-b) * (a-+b) * (a- --b);',
+    ]);
+  });
+});
+
+describe('describeMutation', () => {
+  const base = { id: 'm-1', file: 'src/a.ts', start: 0, end: 1, line: 7, column: 3 };
+  test('shows operator and number tokens with family and line', () => {
+    expect(describeMutation({ ...base, family: 'relational-boundary', original: '>=', replacement: '>' })).toBe('relational-boundary on line 7: >= → >');
+    expect(describeMutation({ ...base, family: 'literal-boundary', original: '18', replacement: '19' })).toBe('literal-boundary on line 7: 18 → 19');
+    expect(describeMutation({ ...base, family: 'arithmetic', original: '+', replacement: '- ' })).toBe('arithmetic on line 7: + → -');
+  });
+  test('never shows source text such as a whole condition', () => {
+    const cond = "user === 'root' &&\n    pw === 'correct horse battery staple'";
+    expect(describeMutation({ ...base, family: 'if-condition', original: cond, replacement: 'true' })).toBe('if-condition on line 7');
+    expect(describeMutation({ ...base, family: 'negation-removal', original: '!', replacement: '' })).toBe('negation-removal on line 7');
+    expect(describeMutation({ ...base, family: 'boolean-return', original: 'true', replacement: 'false' })).toBe('boolean-return on line 7');
+  });
+});
+
+describe('sampleMutations', () => {
+  test('keeps everything under the cap and spreads evenly over it', () => {
+    expect(sampleMutations([1, 2, 3], 5)).toEqual([1, 2, 3]);
+    expect(sampleMutations([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 4)).toEqual([0, 2, 5, 7]);
+  });
+});
+
 describe('applyMutation', () => {
   test('replaces exactly the token', () => {
     const m = muts('target').find((x) => x.original === '>=')!;
@@ -100,7 +182,7 @@ describe('applyMutation', () => {
 });
 
 const t = (file: string, title: string, status: TestResult['status'], timedOut = false): TestResult => ({ file, title, status, timedOut });
-const ids = (...xs: string[]) => new Set(xs);
+const ids = (...xs: string[]) => new Map(xs.map((x): [string, TestResult['status']] => [x, 'passed']));
 
 describe('classify', () => {
   const suite = ids('a.test.ts::one', 'a.test.ts::two');
@@ -130,6 +212,43 @@ describe('classify', () => {
 
   test('missing test identities are an error, not a kill', () => {
     expect(classify(run('completed', [t('a.test.ts', 'one', 'failed')]), suite).outcome).toBe('error');
+  });
+
+  test('skipped and todo tests belong to the suite but never detect a mutation', () => {
+    const withSkip = new Map<string, TestResult['status']>([
+      ['a.test.ts::one', 'passed'],
+      ['a.test.ts::skipped', 'skipped'],
+      ['a.test.ts::todo', 'skipped'],
+    ]);
+    const tests = (one: TestResult['status']) => [t('a.test.ts', 'one', one), t('a.test.ts', 'skipped', 'skipped'), t('a.test.ts', 'todo', 'skipped')];
+    expect(classify(run('completed', tests('passed')), withSkip)).toEqual({ outcome: 'survived', detecting: [] });
+    expect(classify(run('completed', tests('failed')), withSkip)).toEqual({ outcome: 'killed', detecting: ['one'] });
+    // Only skipped tests: nothing can fail.
+    expect(classify(run('completed', [t('a.test.ts', 'x', 'skipped')]), new Map([['a.test.ts::x', 'skipped']])).outcome).toBe('survived');
+  });
+
+  test('a test skipped on the original (ctx.skip() in a branch) that fails on a mutant does not detect it', () => {
+    const suite2 = new Map<string, TestResult['status']>([
+      ['a.test.ts::one', 'passed'],
+      ['a.test.ts::maybe', 'skipped'],
+    ]);
+    expect(classify(run('completed', [t('a.test.ts', 'one', 'passed'), t('a.test.ts', 'maybe', 'failed')]), suite2)).toEqual({ outcome: 'survived', detecting: [] });
+    expect(classify(run('completed', [t('a.test.ts', 'one', 'failed'), t('a.test.ts', 'maybe', 'failed')]), suite2)).toEqual({ outcome: 'killed', detecting: ['one'] });
+  });
+
+  test("another suite's per-test timeout does not hide this suite's result", () => {
+    const other = t('gen.test.ts', 'slow', 'failed', true);
+    expect(classify(run('timeout', [t('a.test.ts', 'one', 'failed'), t('a.test.ts', 'two', 'passed'), other]), suite)).toEqual({ outcome: 'killed', detecting: ['one'] });
+    expect(classify(run('timeout', [t('a.test.ts', 'one', 'passed'), t('a.test.ts', 'two', 'passed'), other]), suite).outcome).toBe('survived');
+    // The whole process timed out: no per-test results to decide from.
+    expect(classify({ status: 'timeout', tests: [], error: 'process exceeded 15s' }, suite)).toMatchObject({ outcome: 'timeout', note: 'process exceeded 15s' });
+  });
+
+  test('.each titles are ordinary identities from the report', () => {
+    const each = ids('a.test.ts::g add(1, 2) = 3', 'a.test.ts::g add(2, 2) = 4');
+    const tests = (second: TestResult['status']) => [t('a.test.ts', 'g add(1, 2) = 3', 'passed'), t('a.test.ts', 'g add(2, 2) = 4', second)];
+    expect(classify(run('completed', tests('passed')), each).outcome).toBe('survived');
+    expect(classify(run('completed', tests('failed')), each)).toEqual({ outcome: 'killed', detecting: ['g add(2, 2) = 4'] });
   });
 });
 

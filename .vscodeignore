@@ -6,3 +6,4 @@
 !LICENSE
 !docs/*.md
 !toolchain.json
+!media/*.svg

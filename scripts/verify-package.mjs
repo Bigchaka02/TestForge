@@ -40,7 +40,7 @@ for (const e of entries) {
     if (re.test(e)) problems.push(`VSIX contains ${what}: ${e}`);
   }
 }
-for (const required of ['extension/package.json', 'extension/dist/extension.js']) {
+for (const required of ['extension/package.json', 'extension/dist/extension.js', 'extension/media/protected.svg', 'extension/media/exposed.svg']) {
   if (!entries.includes(required)) problems.push(`VSIX is missing ${required}`);
 }
 

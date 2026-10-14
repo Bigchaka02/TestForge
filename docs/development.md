@@ -18,14 +18,20 @@ npm run fixtures:install   # npm ci in every fixtures/* project (pinned vitest 5
 | `lint` | ESLint over `src` and `test` |
 | `typecheck` | `tsc --noEmit -p .` |
 | `test:unit` | Vitest over `test/unit` (vscode-free modules) |
-| `test:integration` | Vitest over `test/integration`: the real pipeline on `fixtures/sample` with the fake provider and real tsc/Vitest processes. Needs `fixtures:install` first |
+| `test:integration` | Vitest over `test/integration`: the real pipeline on `fixtures/sample` and `fixtures/realistic` with the fake provider and real tsc/Vitest processes. Needs `fixtures:install` first |
 | `test:extension` | Builds, compiles `test/extension` to `out/`, and runs `vscode-test` (config: `.vscode-test.mjs`) with `fixtures/sample` as the workspace |
 | `fixtures:install` | Runs `npm ci` in each `fixtures/*` directory |
 | `package` | Builds and runs `vsce package --no-dependencies -o testforge.vsix` |
 | `package:check` | `scripts/verify-package.mjs`: inspects the built `testforge.vsix` and `dist/extension.js` |
 | `verify` | lint → typecheck → test:unit → test:integration → package → package:check → test:extension. Stops at the first failure |
 
-**Note:** `test:extension` downloads VS Code from `update.code.visualstudio.com`. In the environment where TestForge was built, that host is blocked (403), so this gate and therefore `verify` are **unverified** there. If the download fails, the step exits non-zero; it does not pass silently. Set `TESTFORGE_VSCODE_VERSION` to pin a VS Code version.
+**Note:** `test:extension` downloads VS Code from `update.code.visualstudio.com`. In the container where TestForge is built, that host is blocked (403), so CI runs it instead. If the download fails, the step exits non-zero; it does not pass silently. Set `TESTFORGE_VSCODE_VERSION` to pin a VS Code version.
+
+## CI
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`, on `ubuntu-latest`, `macos-latest` and `windows-latest` with Node 22: `npm ci`, `fixtures:install`, lint, typecheck, unit and integration tests, package, package check, then the extension-host smoke suite in a real VS Code (under `xvfb-run` on Linux). The Linux job uploads `testforge.vsix` as the `testforge-vsix` artifact.
+
+The smoke suite sets `TESTFORGE_TEST_CONSENT=1` (in `.vscode-test.mjs`). Only in `ExtensionMode.Test` does that skip the consent dialog and the chat tools' confirmation, so a headless host does not block. Extension-host tests print TestForge's output channel lines with a `[TestForge]` prefix, so a CI log says why a run did not start.
 
 ## Extension Development Host
 
@@ -46,6 +52,9 @@ Needs a model available through VS Code's Language Model API (for example, GitHu
 6. Check the **TestForge Results** view: the model label is not `DEMO`, cases list their basis and evidence, and there are mutation results.
 7. **Preview Generated Tests**, then **Apply Tests**. Check that `src/age.testforge.<runId>.test.ts` is created and that a second Apply does not create another file.
 8. Check the TestForge output channel. It must contain no file contents, only names, paths, stages and mutation operator tokens.
-9. Repeat on `src/discount.ts` (expect a failing candidate kept for review) and `src/slow.ts` (expect a timeout).
+9. Repeat on `src/discount.ts` (expect a failing candidate kept for review and a possible-bug warning) and `src/slow.ts` (expect a timeout).
+10. Click **Audit Tests** above `isEligible` (no model): expect 1/3 detected.
+11. In Copilot agent mode, ask the agent to use `#testforgeAudit` on `src/age.ts`. Check the confirmation text, the result (score, surviving changes, next step), and that **Always Allow** skips the confirmation next time. Then try `#testforge`.
+12. **Copy Test Proof (Markdown)** and paste it into a GitHub comment preview.
 
-Record the result in `docs/progress.md`. This check is manual. No automated test covers the real model.
+Record the result in `docs/progress.md`. This check is manual. No automated test covers the real model or a real agent-mode session.

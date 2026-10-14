@@ -38,9 +38,16 @@ const cases: CaseRecord[] = [
   record('throws with hostile message', ['x'], { kind: 'throws', errorName: 'Range"Error`', messageIncludes: '*/ PWNED_MSG()\n' }),
   record('throws, no details', [], { kind: 'throws' }),
   record('evidence comment', [1], { kind: 'returns', value: 1 }, { basis: 'documented', evidence: [{ fileId: 'F1\n*/PWNED_FILEID()', startLine: 1, endLine: 2, excerpt: 'x' }] }),
+  record('evidence paths', [2], { kind: 'returns', value: 2 }, { basis: 'documented', evidence: [{ fileId: 'F1', startLine: 1, endLine: 1, excerpt: 'x' }, { fileId: 'F2', startLine: 3, endLine: 4, excerpt: 'y' }] }),
 ];
 
-const render = (exportName = 'target') => renderTests({ runId: 'abcd1234', exportName, importPath: './target.js', cases, demo: true });
+/** Evidence ids as the prompt numbers them; F2's path is hostile on purpose. */
+const files = [
+  { id: 'F1', rel: 'src/age.ts' },
+  { id: 'F2', rel: 'src/we*/ird\nname.ts' },
+];
+
+const render = (exportName = 'target') => renderTests({ runId: 'abcd1234', exportName, importPath: './target.js', cases, demo: true, files });
 
 function walk(node: ts.Node, visit: (n: ts.Node) => void) {
   visit(node);
@@ -112,6 +119,15 @@ describe('renderTests', () => {
     expect(src).toContain('expect(String((thrown as Error).message)).toContain("*/ PWNED_MSG()\\n");');
   });
 
+  test('evidence comments show project-relative paths and lines, not internal file ids', () => {
+    const evidence = src.split('\n').filter((l) => l.includes('| evidence: '));
+    expect(evidence.filter((l) => l.includes('basis: documented')).map((l) => l.slice(l.indexOf('evidence: ')))).toEqual([
+      'evidence: unknown file:1-2',
+      'evidence: src/age.ts:1, src/we* /ird name.ts:3-4',
+    ]);
+    for (const l of evidence) expect(l).not.toMatch(/\bF\d+\b/);
+  });
+
   test('comments are single-line and cannot close', () => {
     for (const line of src.split('\n').filter((l) => l.startsWith('//'))) expect(line).not.toContain('*/');
     expect(commentText('a\nb*/c\u2028d')).toBe('a b* /c d');
@@ -119,6 +135,18 @@ describe('renderTests', () => {
 
   test('passes the baseline-test restrictions, so an applied file can be re-analyzed', () => {
     expect(checkTestFile(sf)).toEqual([]);
+  });
+
+  test('async targets await the call in async tests and still pass the restrictions', () => {
+    const asrc = renderTests({ runId: 'abcd1234', exportName: 'target', importPath: './target.js', cases, demo: true, isAsync: true, files });
+    const asf = parse('target.testforge.abcd1234.test.ts', asrc);
+    const out = ts.transpileModule(asrc, { reportDiagnostics: true, compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
+    expect(out.diagnostics ?? []).toEqual([]);
+    expect(asrc.match(/, async \(\) => \{/g)).toHaveLength(cases.length);
+    expect(asrc).toContain('expect(await Reflect.apply(target, undefined, args)).toStrictEqual(');
+    expect(asrc).toContain('    await Reflect.apply(target, undefined, args);');
+    expect(src).not.toContain('await');
+    expect(checkTestFile(asf)).toEqual([]);
   });
 
   test('readFingerprints round-trips', () => {
@@ -144,6 +172,6 @@ describe('renderTests', () => {
 
   test('refuses non-JSON values even if a caller skips validation', () => {
     const bad = record('bad', [NaN], { kind: 'returns', value: 1 });
-    expect(() => renderTests({ runId: 'x', exportName: 'f', importPath: './f.js', cases: [bad], demo: false })).toThrow(/non-finite/);
+    expect(() => renderTests({ runId: 'x', exportName: 'f', importPath: './f.js', cases: [bad], demo: false, files })).toThrow(/non-finite/);
   });
 });

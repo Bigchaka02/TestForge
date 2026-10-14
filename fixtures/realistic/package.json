@@ -1,0 +1,15 @@
+{
+  "name": "testforge-realistic",
+  "private": true,
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "tiny-slug": "file:vendor/tiny-slug"
+  },
+  "devDependencies": {
+    "@types/node": "file:vendor/types-node",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

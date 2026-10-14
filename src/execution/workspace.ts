@@ -15,8 +15,9 @@ export interface RunDir {
 }
 
 export function createRunDir(runId: string, base = os.tmpdir()): RunDir {
-  // realpath: Vitest reports real paths (macOS tmpdir is a symlink).
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(base, `${PREFIX}${runId}-`)));
+  // Native realpath: Vitest reports real paths. macOS tmpdir is a symlink, and Windows
+  // tmpdir can be an 8.3 short path (C:\Users\RUNNER~1\...) that only the native call expands.
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(base, `${PREFIX}${runId}-`)));
   fs.writeFileSync(path.join(root, SENTINEL), JSON.stringify({ owner: 'testforge', runId, created: Date.now() }));
   const tmp = path.join(root, 'tmp');
   fs.mkdirSync(tmp);
@@ -32,9 +33,36 @@ function isOwned(dir: string): boolean {
   }
 }
 
+/** Removes a symlink or Windows junction itself, never what it points to. */
+function unlinkIfLink(p: string): void {
+  try {
+    if (!fs.lstatSync(p).isSymbolicLink()) return;
+  } catch {
+    return; // missing
+  }
+  try {
+    fs.unlinkSync(p);
+  } catch {
+    fs.rmdirSync(p); // a directory junction on Windows
+  }
+}
+
+/** Unlinks every symlink and junction under `dir` at any depth, never following one. */
+function unlinkLinks(dir: string): void {
+  for (const name of fs.readdirSync(dir)) {
+    const p = path.join(dir, name);
+    const s = fs.lstatSync(p, { throwIfNoEntry: false });
+    if (s?.isSymbolicLink()) unlinkIfLink(p);
+    else if (s?.isDirectory()) unlinkLinks(p);
+  }
+}
+
 /** Deletes a run directory only if it carries our ownership sentinel. */
 export function removeRunDir(dir: string): boolean {
   if (!isOwned(dir)) return false;
+  // Unlink every link before the recursive delete: inside VS Code on Windows the recursive delete went
+  // through a node_modules junction and deleted the project's packages. Tests can create links too (in tmp/ or anywhere).
+  unlinkLinks(dir);
   fs.rmSync(dir, { recursive: true, force: true });
   return !fs.existsSync(dir);
 }
@@ -64,8 +92,9 @@ function safeJoin(root: string, rel: string): string {
 /**
  * Creates one execution copy: files at their relative paths, package.json, a
  * node_modules link to the target's installed dependencies, and our own configs.
+ * `types` is the tsconfig "types" list (["node"] when the project has @types/node installed).
  */
-export function createCopy(run: RunDir, name: string, projectRoot: string, files: { rel: string; text: string }[], testFiles: string[]): string {
+export function createCopy(run: RunDir, name: string, projectRoot: string, files: { rel: string; text: string }[], testFiles: string[], types: string[]): string {
   const dir = safeJoin(run.root, name);
   fs.mkdirSync(dir);
   for (const f of files) {
@@ -75,16 +104,17 @@ export function createCopy(run: RunDir, name: string, projectRoot: string, files
   }
   fs.copyFileSync(path.join(projectRoot, 'package.json'), path.join(dir, 'package.json'));
   try {
-    fs.symlinkSync(path.join(projectRoot, 'node_modules'), path.join(dir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    // Link the native real path (see resolveTools): a lower-case Windows drive letter from VS Code would load a second copy of vitest.
+    fs.symlinkSync(fs.realpathSync.native(path.join(projectRoot, 'node_modules')), path.join(dir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
   } catch (e) {
     throw new TestForgeError('setup', 'Could not link the project node_modules into the execution copy. TestForge does not install dependencies as a fallback.', String(e));
   }
-  writeConfigs(dir, files.map((f) => f.rel).filter((r) => !testFiles.includes(r)), testFiles);
+  writeConfigs(dir, files.map((f) => f.rel).filter((r) => !testFiles.includes(r)), testFiles, types);
   return dir;
 }
 
 /** (Re)writes the extension-owned configs for the given test file list. */
-export function writeConfigs(dir: string, sources: string[], testFiles: string[]): void {
+export function writeConfigs(dir: string, sources: string[], testFiles: string[], types: string[]): void {
   const vitest = {
     test: {
       root: dir,
@@ -107,7 +137,7 @@ export function writeConfigs(dir: string, sources: string[], testFiles: string[]
   };
   fs.writeFileSync(path.join(dir, 'vitest.testforge.config.mjs'), `export default ${JSON.stringify(vitest, null, 2)};\n`);
   const tsconfig = {
-    compilerOptions: { strict: true, noEmit: true, module: 'nodenext', moduleResolution: 'nodenext', target: 'es2022', skipLibCheck: true, types: [] },
+    compilerOptions: { strict: true, noEmit: true, module: 'nodenext', moduleResolution: 'nodenext', target: 'es2022', skipLibCheck: true, types },
     files: [...sources, ...testFiles],
   };
   fs.writeFileSync(path.join(dir, 'tsconfig.testforge.json'), JSON.stringify(tsconfig, null, 2));
