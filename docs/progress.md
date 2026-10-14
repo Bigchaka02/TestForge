@@ -8,11 +8,11 @@ Last updated 2026-10-12 (v0.2, PR #2). Local environment: Linux x64, Node 22.22.
 |---|---|
 | `npm run lint` | pass (local and CI) |
 | `npm run typecheck` | pass (local and CI) |
-| `npm run test:unit` | 202 passed (11 files) |
-| `npm run test:integration` | 26 passed, 1 skipped locally (a Windows-only test that runs in CI). Real Vitest 5.0.2 + tsc 7.0.2 processes on `fixtures/sample` and `fixtures/realistic`, about 2 minutes |
+| `npm run test:unit` | 222 passed (12 files) |
+| `npm run test:integration` | 29 passed, 1 skipped locally (a Windows-only test that runs in CI). Real Vitest 5.0.2 + tsc 7.0.2 processes on `fixtures/sample` and `fixtures/realistic`, about 2 minutes |
 | `npm run package` | `testforge.vsix`, 17 files, 1.13 MB. CI uploads it as the `testforge-vsix` artifact |
 | `npm run package:check` | pass (no src/test/fixtures/node_modules/secrets; bundle needs only `vscode` + Node built-ins) |
-| `npm run test:extension` | 10 smoke tests in a real VS Code, **pass on Linux, macOS and Windows in CI**. Blocked in the build container only (the VS Code download host returns 403) |
+| `npm run test:extension` | 12 smoke tests in a real VS Code, run in CI on Linux, macOS and Windows. Blocked in the build container only (the VS Code download host returns 403) |
 
 ## Acceptance criteria
 
@@ -52,20 +52,9 @@ All four were Windows-only and are fixed with tests (D12):
 
 The 0.2.0 VSIX was installed into a clean profile of openvscode-server 1.105.1 (VS Code for the web) and driven through the UI: audit, demo run, preview, Copy Test Proof and the `finalPrice` possible bug all matched this document's numbers. Screenshots are in [media/](media/). Desktop VS Code, a live model and the chat tools were not part of it.
 
-## Open review findings (not fixed yet)
+## Review findings (fixed 2026-10-14)
 
-Found by code review and the workbench run after the last CI-green commit. Work paused before the fixes landed.
-
-- High: the consent policy version is still 1, so consents given to 0.1 cover what 0.2 sends (`src/core/types.ts`).
-- High: progress and log lines include the full `if` condition text of if-condition mutations (`src/core/pipeline.ts`).
-- High: a deadline during the improvement pass leaves the generated test, scores and records out of step and blocks Apply (`src/core/pipeline.ts`).
-- Medium: a tool confirmation that was declined leaves a reusable consent key (`src/extension.ts`, `prepareTool`).
-- Medium: editor insights and STALE miss changes made on disk to closed files (no file watcher).
-- Medium: a test skipped on the original (`ctx.skip()`) counts as detecting a mutation (`src/mutation/mutate.ts`, `classify`).
-- Medium: Node globals (`Buffer`, `process`) fail the copy's type check unless some file imports `node:` (`types: []`).
-- Medium, Windows: cleanup only unlinks top-level `node_modules` links, not links tests create deeper in the run dir.
-- UI: the score CodeLens does not refresh after a command run until the editor is focused (focusing the Results view cancels VS Code's pending CodeLens refresh). Results view title buttons have no icons. Preview opens a diff against an empty file. Generated test comments show internal evidence ids (`F1:1-1`).
-- Low: `!!x` gives duplicate mutants; `a+-b` gives invalid `a--b`; one suite's timeout hides the other suite's kill; a `\|` in a proof table cell splits the row; proof text can still form links, @mentions and named entities; the chat summary offers Apply for runs Apply refuses; partial runs read like complete scores in the proof and CodeLens; Results labels keep bidi characters; the audit CodeLens walks test folders on every request; chat-tool runs that do not start are not logged.
+Two code reviews and the workbench run found 22 issues after the last release candidate; all are fixed with tests. The main ones: consent policy version 2 (consents given to 0.1 ask again), progress and log lines never contain `if` condition text, a deadline during the improvement pass keeps the verified first pass, a declined tool confirmation can no longer be reused, a file watcher refreshes editor insights and STALE state, tests skipped on the original never count as detecting, Node globals type-check when `@types/node` is installed, cleanup unlinks links at any depth before deleting, the score CodeLens refreshes after a run, and proof text cannot form links, mentions or hidden characters. The two new extension-host tests (file watcher, preview) run in CI only.
 
 ## Known limitations and placeholders
 
