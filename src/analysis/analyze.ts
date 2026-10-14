@@ -34,7 +34,7 @@ export interface TargetAnalysis {
   files: ProjectFile[]; // source closure + baseline tests
   baselineTests: string[]; // rel paths
   externalImports: string[]; // node: built-ins and installed packages imported by `files`; never read or sent
-  types: string[]; // tsconfig "types" for execution copies: ["node"] when a file imports a node: built-in
+  types: string[]; // tsconfig "types" for execution copies: ["node"] when the project has @types/node installed
   packageHashes: Record<string, string>; // package.json, lockfile
   toolVersions: Record<string, string>;
   exclusions: string[];
@@ -349,14 +349,15 @@ export function analyzeTarget(root: string, sourceAbs: string, exportName: strin
   if (baselineTests.length > LIMITS.maxTestFiles) throw new TestForgeError('unsupported', `There are ${baselineTests.length} baseline test files (limit ${LIMITS.maxTestFiles}).`);
   const total = [...files.values()].reduce((n, f) => n + Buffer.byteLength(f.text), 0);
   if (total > LIMITS.maxContextBytes) throw new TestForgeError('unsupported', `Relevant files total ${Math.round(total / 1024)} KiB (limit ${LIMITS.maxContextBytes / 1024} KiB).`);
-  // Execution copies type-check Node built-in imports against the project's @types/node.
+  // Execution copies type-check Node built-in imports and Node globals (Buffer, process) against the project's @types/node.
   const builtin = externalImports.find((s) => s.startsWith('node:'));
-  if (builtin && !fs.existsSync(path.join(root, 'node_modules', '@types', 'node', 'package.json'))) {
+  const nodeTypes = fs.existsSync(path.join(root, 'node_modules', '@types', 'node', 'package.json'));
+  if (builtin && !nodeTypes) {
     throw new TestForgeError('setup', `The code imports "${builtin}", which needs @types/node to type-check. Install it yourself, e.g. \`npm i -D @types/node\`. TestForge never installs packages.`);
   }
   for (const s of externalImports) exclusions.push(`${s.startsWith('node:') ? 'Node built-in' : 'package'} import ${s} (not sent)`);
 
   const sourceRel = toPosix(path.relative(root, sourceAbs));
   const refreshed = findExports(parse(sourceAbs, files.get(sourceRel)!.text)).find((e) => e.name === exportName)!;
-  return { root, sourceRel, exportName, target: refreshed, files: [...files.values()], baselineTests, externalImports, types: builtin ? ['node'] : [], packageHashes, toolVersions, exclusions };
+  return { root, sourceRel, exportName, target: refreshed, files: [...files.values()], baselineTests, externalImports, types: nodeTypes ? ['node'] : [], packageHashes, toolVersions, exclusions };
 }

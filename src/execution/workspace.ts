@@ -47,12 +47,22 @@ function unlinkIfLink(p: string): void {
   }
 }
 
+/** Unlinks every symlink and junction under `dir` at any depth, never following one. */
+function unlinkLinks(dir: string): void {
+  for (const name of fs.readdirSync(dir)) {
+    const p = path.join(dir, name);
+    const s = fs.lstatSync(p, { throwIfNoEntry: false });
+    if (s?.isSymbolicLink()) unlinkIfLink(p);
+    else if (s?.isDirectory()) unlinkLinks(p);
+  }
+}
+
 /** Deletes a run directory only if it carries our ownership sentinel. */
 export function removeRunDir(dir: string): boolean {
   if (!isOwned(dir)) return false;
-  // Unlink each copy's node_modules link before the recursive delete: inside VS Code on Windows the
-  // recursive delete went through the junction and deleted packages from the project's node_modules.
-  for (const name of fs.readdirSync(dir)) unlinkIfLink(path.join(dir, name, 'node_modules'));
+  // Unlink every link before the recursive delete: inside VS Code on Windows the recursive delete went
+  // through a node_modules junction and deleted the project's packages. Tests can create links too (in tmp/ or anywhere).
+  unlinkLinks(dir);
   fs.rmSync(dir, { recursive: true, force: true });
   return !fs.existsSync(dir);
 }
@@ -82,7 +92,7 @@ function safeJoin(root: string, rel: string): string {
 /**
  * Creates one execution copy: files at their relative paths, package.json, a
  * node_modules link to the target's installed dependencies, and our own configs.
- * `types` is the tsconfig "types" list (["node"] when the files import node: built-ins).
+ * `types` is the tsconfig "types" list (["node"] when the project has @types/node installed).
  */
 export function createCopy(run: RunDir, name: string, projectRoot: string, files: { rel: string; text: string }[], testFiles: string[], types: string[]): string {
   const dir = safeJoin(run.root, name);

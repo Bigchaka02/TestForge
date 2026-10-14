@@ -156,6 +156,15 @@ describe('pipeline on fixtures/realistic', () => {
     expect(report.mutations.every((m) => m.generated === 'killed' || m.generated === 'survived')).toBe(true);
   });
 
+  test('tests that use Node globals (Buffer, process) type-check against the installed @types/node without a node: import', async () => {
+    const usesGlobals = "import { expect, test } from 'vitest';\nimport { remainingQuota } from '../quota.js';\n\ntest('counts the bytes of a text', () => {\n  expect(process.env).toBeDefined();\n  expect(remainingQuota(Buffer.byteLength('abc'), 100)).toBe(97);\n});\n";
+    const root = quotaProject({ 'package-lock.json': read('package-lock.json'), 'src/__tests__/quota.test.ts': usesGlobals });
+    const { report } = await run('src/quota.ts', 'remainingQuota', { root, mutationSample: 2, improve: false });
+    expect(report.failure).toBeUndefined();
+    expect(report.status).toBe('completed');
+    expect(report.baselineRuns).toEqual(['completed', 'completed']);
+  });
+
   test('a failing hook or an unhandled error in a baseline test stops the run instead of counting as passing', async () => {
     const baseline = (body: string) => ({
       'package-lock.json': read('package-lock.json'),

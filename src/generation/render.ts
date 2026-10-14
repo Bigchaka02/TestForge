@@ -24,7 +24,8 @@ export const FINGERPRINT_TAG = 'testforge-fingerprint:';
 /** Names the rendered file declares or uses itself; an export with one of these names is imported under an alias. */
 const RESERVED = new Set(['test', 'expect', 'data', 'args', 'thrown', 'threw', 'error', 'Reflect', 'String', 'Error', 'JSON', 'undefined']);
 
-export function renderTests(opts: { runId: string; exportName: string; importPath: string; cases: CaseRecord[]; demo: boolean; isAsync?: boolean }): string {
+/** `files` maps evidence file ids (F1, ...) to project-relative paths, so comments never show internal ids. */
+export function renderTests(opts: { runId: string; exportName: string; importPath: string; cases: CaseRecord[]; demo: boolean; isAsync?: boolean; files: { id: string; rel: string }[] }): string {
   if (!/^[A-Za-z_$][\w$]*$/.test(opts.exportName)) throw new Error('invalid export name');
   const exportName = RESERVED.has(opts.exportName) ? 'subject' : opts.exportName;
   // Async targets: "returns" means the resolved value and "throws" means a rejection.
@@ -40,9 +41,10 @@ export function renderTests(opts: { runId: string; exportName: string; importPat
     'const data = (json: string): unknown => JSON.parse(json);',
     '',
   ];
+  const rel = new Map(opts.files.map((f) => [f.id, f.rel]));
   for (const c of opts.cases) {
-    const ev = c.evidence.map((e) => `${e.fileId}:${e.startLine}-${e.endLine}`).join(', ') || 'none';
-    lines.push(`// ${c.id} | ${c.category} | basis: ${c.basis} | evidence: ${commentText(ev, 80)}`);
+    const ev = c.evidence.map((e) => `${rel.get(e.fileId) ?? 'unknown file'}:${e.startLine}${e.endLine === e.startLine ? '' : `-${e.endLine}`}`).join(', ') || 'none';
+    lines.push(`// ${c.id} | ${c.category} | basis: ${c.basis} | evidence: ${commentText(ev)}`);
     lines.push(`// ${FINGERPRINT_TAG} ${c.fingerprint}`);
     if (c.rationale) lines.push(`// ${commentText(c.rationale)}`);
     lines.push(`test(${lit(`[${c.id}] ${c.title}`)}, ${opts.isAsync ? 'async ' : ''}() => {`);

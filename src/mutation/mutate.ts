@@ -1,7 +1,7 @@
 // Small AST mutation engine: eight operator families, inside the selected function
 // body only, one mutation at a time on pristine text.
 import ts from 'typescript';
-import { Mutation, MutationOutcome, MutationRecord, SuiteRun, SuiteScore, Comparison } from '../core/types';
+import { Mutation, MutationOutcome, MutationRecord, SuiteRun, SuiteScore, Comparison, TestStatus } from '../core/types';
 import { sha256 } from '../core/util';
 
 const RELATIONAL: Partial<Record<ts.SyntaxKind, string>> = {
@@ -59,10 +59,15 @@ export function enumerateMutations(sf: ts.SourceFile, fn: ts.Node, rel: string, 
       }
       if (EQUALITY[k]) add('strict-equality', n.operatorToken, EQUALITY[k]!);
       // `+` on strings would only produce a compile error, so string concatenation is skipped.
-      if (ARITHMETIC[k] && !(k === ts.SyntaxKind.PlusToken && (isStringish(n.left) || isStringish(n.right)))) add('arithmetic', n.operatorToken, ARITHMETIC[k]!);
+      if (ARITHMETIC[k] && !(k === ts.SyntaxKind.PlusToken && (isStringish(n.left) || isStringish(n.right)))) {
+        // `a+-b` must become `a- -b`, not `a--b`: a sign right after the new operator would merge with it.
+        const merges = /[+-]/.test(ARITHMETIC[k]!) && /[+-]/.test(sf.text.charAt(n.operatorToken.getEnd()));
+        add('arithmetic', n.operatorToken, merges ? `${ARITHMETIC[k]!} ` : ARITHMETIC[k]!);
+      }
       if (LOGICAL[k]) add('logical', n.operatorToken, LOGICAL[k]!);
     }
-    if (ts.isPrefixUnaryExpression(n) && n.operator === ts.SyntaxKind.ExclamationToken) {
+    // In `!!x` only the inner `!` is removed: removing either one gives the same program.
+    if (ts.isPrefixUnaryExpression(n) && n.operator === ts.SyntaxKind.ExclamationToken && !(ts.isPrefixUnaryExpression(n.operand) && n.operand.operator === ts.SyntaxKind.ExclamationToken)) {
       const start = n.getStart(sf);
       addSpan('negation-removal', start, start + 1, '');
     }
@@ -98,18 +103,28 @@ export function applyMutation(text: string, m: Mutation): string {
   return text.slice(0, m.start) + m.replacement + text.slice(m.end);
 }
 
+const TOKEN = /^(?:[<>=!+\-*/%&|]{1,3}|\d{1,12})$/;
+
+/** Progress text for a mutation: family and line, plus the tokens only when both are a short operator or number, never other source text. */
+export function describeMutation(m: Mutation): string {
+  const [from, to] = [m.original, m.replacement.trim()];
+  return `${m.family} on line ${m.line}${TOKEN.test(from) && TOKEN.test(to) ? `: ${from} → ${to}` : ''}`;
+}
+
 /**
  * Classifies one suite's outcome for a mutant run.
- * `suiteTests` are the test identities (file::title) of the suite's run on the original code.
- * Skipped and todo tests are part of the suite but never fail, so they never detect a mutation.
+ * `suiteTests` maps the test identities (file::title) of the suite's run on the original code to
+ * their status there. Only tests that passed on the original can detect a mutation: skipped and
+ * todo tests never fail, and a test skipped there (ctx.skip() in a branch) proves nothing when it fails.
+ * A per-test timeout in another suite does not hide this suite's result.
  */
-export function classify(run: SuiteRun, suiteTests: Set<string>): { outcome: MutationOutcome; detecting: string[]; note?: string } {
+export function classify(run: SuiteRun, suiteTests: Map<string, TestStatus>): { outcome: MutationOutcome; detecting: string[]; note?: string } {
   if (run.status === 'cancelled') return { outcome: 'not-run', detecting: [] };
   const mine = run.tests.filter((t) => suiteTests.has(`${t.file}::${t.title}`));
-  if (run.status === 'timeout' || mine.some((t) => t.timedOut)) return { outcome: 'timeout', detecting: [], note: run.error };
+  if (mine.some((t) => t.timedOut) || (run.status === 'timeout' && !run.tests.length)) return { outcome: 'timeout', detecting: [], note: run.error };
   if (run.status === 'error') return { outcome: 'error', detecting: [], note: run.error };
   if (new Set(mine.map((t) => `${t.file}::${t.title}`)).size !== suiteTests.size) return { outcome: 'error', detecting: [], note: 'test identities differ from the original run' };
-  const failed = mine.filter((t) => t.status === 'failed');
+  const failed = mine.filter((t) => t.status === 'failed' && suiteTests.get(`${t.file}::${t.title}`) === 'passed');
   if (failed.length) return { outcome: 'killed', detecting: failed.map((t) => t.title) };
   return { outcome: 'survived', detecting: [] };
 }

@@ -4,10 +4,11 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, test } from 'vitest';
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { runPipeline, PipelineInput } from '../../src/core/pipeline';
 import type { RunReport } from '../../src/core/types';
 import { sha256 } from '../../src/core/util';
+import { score } from '../../src/mutation/mutate';
 import { FakeProvider } from '../../src/providers/fake';
 import { summarize } from '../../src/ui/summary';
 
@@ -139,6 +140,7 @@ describe('pipeline on fixtures/sample', () => {
     expect(report.scores.comparison).toEqual({ denominator: 3, before: 1, after: 3, excluded: 0 });
     expect(report.generatedTestPath).toBe(`src/age.testforge.${report.runId}.test.ts`);
     expect(report.generatedTest).toContain("import { isEligible } from \"./age.js\";");
+    expect(report.generatedTest).toContain(`// ${accepted[0].id} | boundary | basis: documented | evidence: src/age.ts:1\n`);
     expect(report.inputHashes['src/age.ts']).toBe(before['age.ts']);
   });
 
@@ -265,6 +267,66 @@ describe('pipeline on fixtures/sample', () => {
     const skipped = await run('clamp.ts', 'clamp', { improve: false });
     expect(skipped.report.improvement).toBeUndefined();
     expect(skipped.report.modelRequests).toBe(1);
+  });
+
+  /** Stops a clamp run (4 first-pass survivors) after its first improvement re-check, by deadline or by cancel. */
+  async function stopDuringRecheck(stop: (abort: () => void) => void): Promise<{ report: RunReport; messages: string[] }> {
+    const messages: string[] = [];
+    let improving = false;
+    let stopped = false;
+    const ctrl = new AbortController();
+    // Fake setTimeout so the run deadline fires exactly when the test says (vitest keeps its own timers).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { report } = await run('clamp.ts', 'clamp', {
+        mutationSample: 20,
+        globalDeadlineMs: 300_000,
+        signal: ctrl.signal,
+        onStage: (stage, message) => {
+          messages.push(message);
+          if (stage === 'improving') improving = true;
+          // Mutation 2 of the re-check: mutation 1 already ran against the improved file.
+          if (improving && !stopped && message.startsWith('Mutation 2/')) {
+            stopped = true;
+            stop(() => ctrl.abort());
+          }
+        },
+      });
+      expect(stopped).toBe(true);
+      return { report, messages };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  /** Scores and the improvement summary agree with the per-mutation records; the first-pass file and outcomes stand. */
+  function expectFirstPassKept(report: RunReport) {
+    expect(report.scores.generated).toEqual(score(report.mutations.map((m) => m.generated)));
+    expect(report.scores.generated).toEqual({ killed: 5, survived: 4, excluded: 0, rate: 5 / 9 });
+    const added = report.cases.filter((c) => c.round === 'improvement');
+    expect(added.map((c) => [c.status, c.rejectReason])).toEqual(added.map(() => ['rejected', 'not added: the run ended before the improvement re-check finished']));
+    for (const c of added) expect(report.generatedTest).not.toContain(`[${c.id}]`);
+    for (const c of report.cases.filter((x) => x.round !== 'improvement')) expect(report.generatedTest).toContain(`[${c.id}]`);
+  }
+
+  test('a deadline during the improvement re-check keeps the first pass: partial, no failure, scores match the records', async () => {
+    const { report, messages } = await stopDuringRecheck(() => vi.advanceTimersByTime(300_000));
+    expect(report.failure).toBeUndefined();
+    expect(report.status).toBe('partial');
+    expect(report.limitations).toContain('The 300s run deadline was reached; results are partial.');
+    expectFirstPassKept(report);
+    expect(report.improvement).toEqual({ survivorsBefore: 4, proposed: 2, added: 0, killed: 0 });
+    // Progress messages name family and line, never the condition text of an if-condition mutation.
+    expect(messages).toContain('Mutation 1/9: if-condition on line 7');
+    expect(messages).toContain('Mutation 3/9: relational-boundary on line 7: < → <=');
+    for (const m of messages) expect(m).not.toMatch(/MIN|max </);
+  });
+
+  test('a cancel during the improvement re-check ends the run cancelled with scores that match the records', async () => {
+    const { report } = await stopDuringRecheck((abort) => abort());
+    expect(report.status).toBe('cancelled');
+    expect(report.failure?.kind).toBe('cancelled');
+    expectFirstPassKept(report);
   });
 
   test('joinWords — no supported mutation opportunities', async () => {
