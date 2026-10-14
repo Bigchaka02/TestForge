@@ -48,6 +48,25 @@ All four were Windows-only and are fixed with tests (D12):
 3. VS Code passes lower-case drive letters; the Vitest CLI and the tests' `vitest` import loaded as two copies ("failed to find the current suite").
 4. Inside VS Code, cleanup's recursive delete went through the `node_modules` junction and deleted packages from the project's `node_modules`.
 
+## Manual run in a real workbench (2026-10-14)
+
+The 0.2.0 VSIX was installed into a clean profile of openvscode-server 1.105.1 (VS Code for the web) and driven through the UI: audit, demo run, preview, Copy Test Proof and the `finalPrice` possible bug all matched this document's numbers. Screenshots are in [media/](media/). Desktop VS Code, a live model and the chat tools were not part of it.
+
+## Open review findings (not fixed yet)
+
+Found by code review and the workbench run after the last CI-green commit. Work paused before the fixes landed.
+
+- High: the consent policy version is still 1, so consents given to 0.1 cover what 0.2 sends (`src/core/types.ts`).
+- High: progress and log lines include the full `if` condition text of if-condition mutations (`src/core/pipeline.ts`).
+- High: a deadline during the improvement pass leaves the generated test, scores and records out of step and blocks Apply (`src/core/pipeline.ts`).
+- Medium: a tool confirmation that was declined leaves a reusable consent key (`src/extension.ts`, `prepareTool`).
+- Medium: editor insights and STALE miss changes made on disk to closed files (no file watcher).
+- Medium: a test skipped on the original (`ctx.skip()`) counts as detecting a mutation (`src/mutation/mutate.ts`, `classify`).
+- Medium: Node globals (`Buffer`, `process`) fail the copy's type check unless some file imports `node:` (`types: []`).
+- Medium, Windows: cleanup only unlinks top-level `node_modules` links, not links tests create deeper in the run dir.
+- UI: the score CodeLens does not refresh after a command run until the editor is focused (focusing the Results view cancels VS Code's pending CodeLens refresh). Results view title buttons have no icons. Preview opens a diff against an empty file. Generated test comments show internal evidence ids (`F1:1-1`).
+- Low: `!!x` gives duplicate mutants; `a+-b` gives invalid `a--b`; one suite's timeout hides the other suite's kill; a `\|` in a proof table cell splits the row; proof text can still form links, @mentions and named entities; the chat summary offers Apply for runs Apply refuses; partial runs read like complete scores in the proof and CodeLens; Results labels keep bidi characters; the audit CodeLens walks test folders on every request; chat-tool runs that do not start are not logged.
+
 ## Known limitations and placeholders
 
 - `testforge.requirementsFile` setting is a placeholder.

@@ -19,7 +19,9 @@ The existing tests in `src/age.test.ts` check 17 → false and 25 → true. They
 
 1. Open `src/age.ts` and click **TestForge: Audit Tests** above `isEligible`. Approve the execution-only consent (asked once per workspace).
 2. Result: **Existing tests: 1/3 detected**. TestForge changed the code three ways (`>=` → `>`, `18` → `17`, `18` → `19`) and ran the real tests against each change. Only `18` → `17` made a test fail. The other two would ship unnoticed.
-3. In the editor, line 3 gets an "exposed" gutter marker. Hover it to see which changes were missed.
+3. In the editor, line 3 gets an "exposed" gutter marker. Hover the code on line 3 (not the marker) to see which changes were missed.
+
+![Audit of isEligible in VS Code](media/audit.png)
 
 ## 2. Generate & Verify: tests that are proven to catch bugs
 
@@ -32,6 +34,8 @@ The existing tests in `src/age.test.ts` check 17 → false and 25 → true. They
 4. **Preview Generated Tests** shows the file read-only. **Apply Tests** creates `src/age.testforge.<runId>.test.ts` and never overwrites a file.
 5. **Copy Test Proof (Markdown)** (Results view title menu or the Run group) copies a before/after table and the mutation results for a pull request.
 
+![Generate & Verify on isEligible: 1/3 to 3/3](media/generate.png)
+
 All numbers come from real `tsc` and Vitest runs on temporary copies. Nothing is written to the project before Apply.
 
 ## 3. Possible bug: the docs and the code disagree
@@ -41,6 +45,8 @@ All numbers come from real `tsc` and Vitest runs on temporary copies. Nothing is
 1. Run the demo on `finalPrice`.
 2. The documented case fails against the code. TestForge keeps it for review (status `partial`, no mutation scores) and shows a warning on `finalPrice`: **Possible bug (DEMO): "member order of exactly 100 costs 90" is documented (src/discount.ts:3) but fails against the code**. The related information points at the documented line.
 3. The proof's **Possible bugs** section lists it. Applying it needs **Apply Failing Candidate**.
+
+![Possible bug warning on finalPrice](media/possible-bug.png)
 
 ## 4. Agent mode: the coding agent checks its own tests
 

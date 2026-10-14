@@ -13,6 +13,8 @@ TestForge is a VS Code extension that proves whether tests catch bugs. It makes 
 
 All numbers come from real `tsc` and Vitest runs on temporary copies of your code. Nothing is written to your workspace until you click **Apply**.
 
+![TestForge in VS Code: existing tests catch 1/3 changes, 3/3 with a generated test](docs/media/generate.png)
+
 ## The one-click flow
 
 1. Open a `.ts` file. Above an exported function, click **TestForge: Audit Tests** or **TestForge: Generate & Verify Tests**.
