@@ -29,7 +29,7 @@ Each file is checked against a few regexes before it is included: private-key he
 
 ## Consent
 
-A modal dialog asks before the first command run. It lists the files that will be sent and states that code will be executed. **Show Outgoing Context** opens the exact prompt read-only. The answer is stored in workspace state per **workspace + model label + consent policy version** (`CONSENT_POLICY_VERSION = 1`), so a new model or a policy change asks again. Demo and audit runs share one execution-only consent per workspace, because they still execute code. VS Code's Language Model API may add its own permission prompt.
+A modal dialog asks before the first command run. It lists the files that will be sent and states that code will be executed. **Show Outgoing Context** opens the exact prompt read-only. The answer is stored in workspace state per **workspace + model label + consent policy version** (`CONSENT_POLICY_VERSION = 2`), so a new model or a policy change asks again. Demo and audit runs share one execution-only consent per workspace, because they still execute code. VS Code's Language Model API may add its own permission prompt.
 
 **Chat tools** (Copilot agent mode) use VS Code's tool confirmation as the consent. It names the function, the files and, for generate, the model, and says that code runs. A tool runs only a call whose confirmation matches its mode, file, function, model and file list; if anything changed after the confirmation, it refuses and asks to be called again. If you choose "Always Allow" for a tool in VS Code, later calls run without asking. Tools never apply tests: the generated file is written only by **TestForge: Apply Tests**.
 
