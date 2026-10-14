@@ -8,9 +8,9 @@ import { readFingerprints, renderTests } from '../generation/render';
 import { EvidenceFile, parseModelText, validatePlan, ValidationResult } from '../generation/validate';
 import { resolveNode, resolveTools, runVitest, typeCheck } from '../execution/runner';
 import { createCopy, createRunDir, removeRunDir, RunDir, writeConfigs, writeFile } from '../execution/workspace';
-import { applyMutation, classify, compare, enumerateMutations, sampleMutations, score } from '../mutation/mutate';
+import { applyMutation, classify, compare, describeMutation, enumerateMutations, sampleMutations, score } from '../mutation/mutate';
 import type { ModelProvider } from '../providers/provider';
-import { CaseRecord, LIMITS, MutationRecord, RunReport, Stage, SuiteRun, TerminalStatus, TestForgeError } from './types';
+import { CaseRecord, LIMITS, MutationRecord, RunReport, Stage, SuiteRun, TerminalStatus, TestForgeError, TestStatus } from './types';
 import { newRunId, sha256 } from './util';
 
 interface PipelineOptions {
@@ -34,6 +34,16 @@ export type PipelineInput = PipelineOptions & RunMode;
 
 const id = (file: string, title: string) => `${file}::${title}`;
 const signature = (r: SuiteRun) => r.tests.map((t) => `${id(t.file, t.title)}=${t.status}`).sort().join('\n');
+
+/** Test identities of a run on the original code with their status there ("passed" only if every test of that identity passed). */
+const suiteOf = (r: SuiteRun) => {
+  const out = new Map<string, TestStatus>();
+  for (const t of r.tests) {
+    const k = id(t.file, t.title);
+    if ((out.get(k) ?? 'passed') === 'passed') out.set(k, t.status);
+  }
+  return out;
+};
 
 /** True when two runs of the same suite produced the same tests with the same outcomes (order-insensitive). */
 export const sameResults = (a: SuiteRun, b: SuiteRun) => signature(a) === signature(b);
@@ -157,7 +167,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
 
     // Stage 4: baseline suite A, twice
     stage('checking-baseline', 'Running existing tests');
-    let baselineIds = new Set<string>();
+    let baselineIds = new Map<string, TestStatus>();
     if (a.baselineTests.length) {
       const runs: SuiteRun[] = [];
       for (let i = 0; i < 2; i++) {
@@ -170,7 +180,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
         runs.push(r);
       }
       if (!sameResults(runs[0], runs[1])) throw new TestForgeError('unstable', 'Existing tests gave different results on two runs; scoring stopped.');
-      baselineIds = new Set(runs[0].tests.map((t) => id(t.file, t.title)));
+      baselineIds = suiteOf(runs[0]);
     } else {
       report.limitations.push('No existing tests of the module were found (next to it, in __tests__/, or under test/ or tests/), so there is no before/after comparison.');
     }
@@ -185,7 +195,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
           m.baseline = 'not-run';
           continue;
         }
-        input.onStage?.('checking-mutations', `Mutation ${i + 1}/${report.mutations.length}: ${m.original} → ${m.replacement || '(removed)'}`);
+        input.onStage?.('checking-mutations', `Mutation ${i + 1}/${report.mutations.length}: ${describeMutation(m)}`);
         writeFile(copy, report.sourceFile, applyMutation(pristine, m));
         const mtc = await typeCheck(tools, copy, run.tmp, sig);
         if (!mtc.ok) {
@@ -251,7 +261,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     const base = path.posix.basename(report.sourceFile, '.ts');
     const genRel = path.posix.join(path.posix.dirname(report.sourceFile), `${base}.testforge.${runId}.test.ts`);
     report.generatedTestPath = genRel;
-    report.generatedTest = renderTests({ runId, exportName: a.exportName, importPath: `./${base}.js`, cases: accepted, demo: input.provider.isFake, isAsync: a.target.isAsync });
+    report.generatedTest = renderTests({ runId, exportName: a.exportName, importPath: `./${base}.js`, cases: accepted, demo: input.provider.isFake, isAsync: a.target.isAsync, files: evFiles });
 
     // Stage 6: suite B (baseline + generated) against original code, twice
     stage('validating-candidates', 'Running generated tests against the original code');
@@ -285,14 +295,14 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
       return report;
     }
     if (!sameResults(cRuns[0], cRuns[1])) throw new TestForgeError('unstable', 'Tests gave different results on two runs against the original code; scoring stopped.');
-    const allIds = new Set(cRuns[0].tests.map((t) => id(t.file, t.title)));
+    const allIds = suiteOf(cRuns[0]);
 
     /**
      * Writes a new generated file into the copy and runs it twice against the original code.
      * Cases in `added` that do not pass are rejected; returns the new suite identities, or
      * undefined when the new file could not be verified (the caller restores the old one).
      */
-    const verifyOnOriginal = async (src: string, added: CaseRecord[]): Promise<Set<string> | undefined> => {
+    const verifyOnOriginal = async (src: string, added: CaseRecord[]): Promise<Map<string, TestStatus> | undefined> => {
       writeFile(copy, genRel, src);
       const tcx = await typeCheck(tools, copy, run!.tmp, sig);
       checkAbort();
@@ -313,7 +323,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
         if (t?.message) c.failureMessage = t.message;
       }
       const ok = runs.length === 2 && runs.every((r) => r.status === 'completed') && sameResults(runs[0], runs[1]) && runs[0].tests.every((t) => t.status !== 'failed');
-      if (ok) return new Set(runs[0].tests.map((t) => id(t.file, t.title)));
+      if (ok) return suiteOf(runs[0]);
       for (const c of added) Object.assign(c, { status: 'rejected', rejectReason: c.originalOutcome === 'passed' ? 'dropped with the other improvement cases' : `${c.originalOutcome} against the original code in the improvement pass` });
       return undefined;
     };
@@ -324,7 +334,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     report.mutations = sampleMutants(a, report, input.mutationSample);
 
     /** Runs each mutant against the current generated file. `generatedOnly` keeps baseline outcomes (re-checks after the improvement pass). */
-    const checkMutants = async (list: MutationRecord[], suiteIds: Set<string>, generatedOnly: boolean) => {
+    const checkMutants = async (list: MutationRecord[], suiteIds: Map<string, TestStatus>, generatedOnly: boolean) => {
       for (const [i, m] of list.entries()) {
         if (sig.aborted) {
           if (generatedOnly) break;
@@ -332,7 +342,7 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
           m.generated = 'not-run';
           continue;
         }
-        input.onStage?.('checking-mutations', `Mutation ${i + 1}/${list.length}: ${m.original} → ${m.replacement || '(removed)'}`);
+        input.onStage?.('checking-mutations', `Mutation ${i + 1}/${list.length}: ${describeMutation(m)}`);
         writeFile(copy, report.sourceFile, applyMutation(pristine, m));
         const mtc = await typeCheck(tools, copy, run!.tmp, sig);
         if (mtc.cancelled) {
@@ -373,27 +383,43 @@ export async function runPipeline(input: PipelineInput): Promise<RunReport> {
     const survivors = report.mutations.filter((m) => m.generated === 'survived');
     if (survivors.length && !sig.aborted && input.improve !== false) {
       stage('improving', `Asking for cases that detect ${survivors.length} missed change(s)`);
-      const imp = await improvementPass({ a, evFiles, known, accepted, survivors, report, provider: input.provider, sig });
-      const render = (extra: CaseRecord[]) => renderTests({ runId, exportName: a.exportName, importPath: `./${base}.js`, cases: [...accepted, ...extra], demo: input.provider.isFake, isAsync: a.target.isAsync });
-      let added = imp.added.filter((c) => c.status === 'accepted');
-      let verified = added.length ? await verifyOnOriginal(render(added), added) : undefined;
-      // One retry with only the cases that passed, so one wrong expectation does not discard the rest.
-      const passing = added.filter((c) => c.originalOutcome === 'passed');
-      if (!verified && passing.length && passing.length < added.length) {
-        for (const c of passing) Object.assign(c, { status: 'accepted', rejectReason: undefined });
-        added = passing;
-        verified = await verifyOnOriginal(render(added), added);
-      }
-      if (verified) {
-        report.generatedTest = render(added);
-        await checkMutants(survivors, verified, true);
-        checkAbort();
+      // A deadline or cancel before the re-check finishes keeps the first-pass file and outcomes.
+      const firstPass = { test: report.generatedTest, outcomes: survivors.map(({ generated, detectingTests, note }) => ({ generated, detectingTests, note })) };
+      let imp: { proposed: number; added: CaseRecord[]; note?: string } = { proposed: 0, added: [] };
+      let added: CaseRecord[] = [];
+      let rechecked = false;
+      try {
+        imp = await improvementPass({ a, evFiles, known, accepted, survivors, report, provider: input.provider, sig });
+        const render = (extra: CaseRecord[]) => renderTests({ runId, exportName: a.exportName, importPath: `./${base}.js`, cases: [...accepted, ...extra], demo: input.provider.isFake, isAsync: a.target.isAsync, files: evFiles });
+        added = imp.added.filter((c) => c.status === 'accepted');
+        let verified = added.length ? await verifyOnOriginal(render(added), added) : undefined;
+        // One retry with only the cases that passed, so one wrong expectation does not discard the rest.
+        const passing = added.filter((c) => c.originalOutcome === 'passed');
+        if (!verified && passing.length && passing.length < added.length) {
+          for (const c of passing) Object.assign(c, { status: 'accepted', rejectReason: undefined });
+          added = passing;
+          verified = await verifyOnOriginal(render(added), added);
+        }
+        if (verified) {
+          report.generatedTest = render(added);
+          await checkMutants(survivors, verified, true);
+          rechecked = !sig.aborted;
+        } else if (added.length) {
+          writeFile(copy, genRel, report.generatedTest);
+        }
+      } catch (e) {
+        if (!sig.aborted || e !== sig.reason) throw e;
+      } finally {
+        if (!rechecked) {
+          report.generatedTest = firstPass.test;
+          survivors.forEach((m, i) => Object.assign(m, firstPass.outcomes[i]));
+          for (const c of imp.added) if (c.status === 'accepted') Object.assign(c, { status: 'rejected', rejectReason: 'not added: the run ended before the improvement re-check finished' });
+        }
         scoreAll();
-      } else if (added.length) {
-        writeFile(copy, genRel, report.generatedTest);
       }
+      endMutations();
       const killed = survivors.filter((m) => m.generated === 'killed').length;
-      report.improvement = { survivorsBefore: survivors.length, proposed: imp.proposed, added: verified ? added.length : 0, killed };
+      report.improvement = { survivorsBefore: survivors.length, proposed: imp.proposed, added: rechecked ? added.length : 0, killed };
       if (imp.added.some((c) => c.status !== 'accepted' && c.originalOutcome && c.originalOutcome !== 'passed')) {
         report.limitations.push('Some improvement cases failed against the original code and were not added. They are listed under Cases: each may point at a bug or a wrong expectation.');
       }

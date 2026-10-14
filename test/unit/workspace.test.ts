@@ -1,9 +1,25 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, beforeEach, describe, expect, test } from 'vitest';
+import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { cleanupStale, createCopy, createRunDir, removeRunDir, SENTINEL, writeFile } from '../../src/execution/workspace';
 import { TestForgeError } from '../../src/core/types';
+
+/** Links still inside a directory when the recursive delete starts: on Windows that delete can follow them. */
+const linksAtDelete = vi.hoisted(() => [] as string[]);
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>();
+  const links = (p: string): string[] => {
+    const s = real.lstatSync(p, { throwIfNoEntry: false });
+    if (s?.isSymbolicLink()) return [p];
+    return s?.isDirectory() ? real.readdirSync(p).flatMap((n) => links(path.join(p, n))) : [];
+  };
+  const rmSync: typeof real.rmSync = (p, opts) => {
+    linksAtDelete.push(...links(String(p)));
+    real.rmSync(p, opts);
+  };
+  return { ...real, rmSync, default: { ...real, rmSync } };
+});
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'testforge-unit-ws-'));
 afterAll(() => fs.rmSync(base, { recursive: true, force: true }));
@@ -52,6 +68,26 @@ describe('run directories', () => {
     fs.mkdirSync(d);
     fs.writeFileSync(path.join(d, SENTINEL), 'not json');
     expect(removeRunDir(d)).toBe(false);
+  });
+});
+
+describe('links inside a run directory', () => {
+  test('removeRunDir unlinks nested links pointing outside before deleting; their targets survive', () => {
+    const outside = path.join(dir, 'outside');
+    fs.mkdirSync(path.join(outside, 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'pkg', 'keep.txt'), 'keep');
+    const run = createRunDir('links', dir);
+    const kind = process.platform === 'win32' ? 'junction' : 'dir';
+    // Links a test could create anywhere in the run dir: in its TMP dir and deeper in a copy.
+    fs.mkdirSync(path.join(run.tmp, 'a', 'b'), { recursive: true });
+    fs.symlinkSync(outside, path.join(run.tmp, 'a', 'b', 'link'), kind);
+    fs.mkdirSync(path.join(run.root, 'original', 'src', 'deep'), { recursive: true });
+    fs.symlinkSync(path.join(outside, 'pkg'), path.join(run.root, 'original', 'src', 'deep', 'pkg-link'), kind);
+    linksAtDelete.length = 0;
+    expect(removeRunDir(run.root)).toBe(true);
+    expect(linksAtDelete).toEqual([]);
+    expect(fs.existsSync(run.root)).toBe(false);
+    expect(fs.readFileSync(path.join(outside, 'pkg', 'keep.txt'), 'utf8')).toBe('keep');
   });
 });
 

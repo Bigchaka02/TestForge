@@ -173,6 +173,11 @@ describe('analyzeTarget', () => {
     expect(analyzeTarget(root, path.join(root, 'src/m.ts'), 'f')).toMatchObject({ externalImports: ['lodash'], types: [] });
   });
 
+  test('an installed @types/node is used without node: imports, for Node globals such as Buffer and process', () => {
+    const root = project({ packages: ['@types/node'], files: { 'src/m.ts': 'export function f(a: string): number { return Buffer.byteLength(a); }\n' } });
+    expect(analyzeTarget(root, path.join(root, 'src/m.ts'), 'f')).toMatchObject({ externalImports: [], types: ['node'] });
+  });
+
   test('node: built-ins need @types/node installed (a setup error, nothing is installed)', () => {
     const root = project({ files: { 'src/m.ts': "import { join } from 'node:path';\nexport function f(a: string): string { return join(a, 'x'); }\n" } });
     expect(rejection(root)).toMatchObject({ kind: 'setup', message: expect.stringMatching(/imports "node:path", which needs @types\/node.*never installs/) });
