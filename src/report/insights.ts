@@ -3,6 +3,7 @@
 // untrusted (titles and messages can come from a model), so they are escaped in Markdown.
 import { findExports, parse } from '../analysis/analyze';
 import type { CaseRecord, MutationOutcome, MutationRecord, RunReport } from '../core/types';
+import { visible } from './markdown';
 
 export interface LineInsight {
   line: number; // 1-based line in report.sourceFile
@@ -18,9 +19,9 @@ export interface PossibleBug {
 
 const WORD: Record<MutationOutcome, string> = { killed: 'DETECTED', survived: 'MISSED', invalid: 'INVALID', timeout: 'TIMEOUT', error: 'ERROR', 'not-run': 'NOT RUN' };
 
-/** Display text on one line: whitespace, control and bidi characters collapse to one space; long text is cut. */
+/** Display text on one line: whitespace, control, invisible and bidi characters collapse to one space; long text is cut. */
 const oneLine = (s: string, max = 300): string => {
-  const t = s.replace(/[\s\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]+/g, ' ').trim();
+  const t = visible(s).replace(/\s+/g, ' ').trim();
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 };
 
@@ -66,14 +67,20 @@ export function lineInsights(report: RunReport): LineInsight[] {
   return out;
 }
 
-/** One line for a CodeLens, built only from the report's scores. Undefined when nothing was scored. */
+/**
+ * One line for a CodeLens, built only from the report's scores. Undefined when nothing was scored.
+ * A run that did not complete, and mutations that were excluded or not run, are named next to the score.
+ */
 export function scoreSummary(report: RunReport): string | undefined {
   const { baseline, generated, comparison } = report.scores;
-  const demo = report.demo ? ' (DEMO)' : '';
-  if (comparison?.denominator) return `TestForge: existing tests catch ${comparison.before}/${comparison.denominator} changes → ${comparison.after}/${comparison.denominator} with generated tests${demo}`;
+  const notes = (excluded: number) => {
+    const parts = [report.status !== 'completed' && report.status.toUpperCase(), excluded > 0 && `${excluded} excluded or not run`, report.demo && 'DEMO'].filter(Boolean);
+    return parts.length ? ` (${parts.join(', ')})` : '';
+  };
+  if (comparison?.denominator) return `TestForge: existing tests catch ${comparison.before}/${comparison.denominator} changes → ${comparison.after}/${comparison.denominator} with generated tests${notes(comparison.excluded)}`;
   const s = generated ?? baseline;
   if (!s || s.rate === null) return undefined;
-  return `TestForge: tests catch ${s.killed}/${s.killed + s.survived} changes${generated ? ' with generated tests' : ''}${demo}`;
+  return `TestForge: tests catch ${s.killed}/${s.killed + s.survived} changes${generated ? ' with generated tests' : ''}${notes(s.excluded)}`;
 }
 
 const BACKED_BY: Partial<Record<CaseRecord['basis'], string>> = { documented: 'is documented', 'existing-test': 'follows from an existing test' };

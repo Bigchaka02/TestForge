@@ -2,6 +2,7 @@
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import type { MutationRecord } from '../core/types';
+import { visible } from '../report/markdown';
 import type { StoredRun } from '../storage/apply';
 import { caseWord, fmtScore, WORD } from './summary';
 
@@ -24,8 +25,9 @@ export class ResultsProvider implements vscode.TreeDataProvider<Node> {
   }
 
   getTreeItem(n: Node): vscode.TreeItem {
-    const item = new vscode.TreeItem(n.label, n.children ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
-    item.description = n.description;
+    // Labels carry model titles, questions and source fragments: no character may hide or reorder them.
+    const item = new vscode.TreeItem(visible(n.label), n.children ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+    item.description = n.description && visible(n.description);
     item.tooltip = n.tooltip;
     item.command = n.command;
     if (n.icon) item.iconPath = new vscode.ThemeIcon(n.icon);

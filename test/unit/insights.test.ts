@@ -7,7 +7,7 @@ import { escapeMarkdown, lineInsights, possibleBugs, scoreSummary, targetLine } 
 const FIXTURE = path.resolve(__dirname, '../../fixtures/sample/src');
 
 function report(over: Partial<RunReport> = {}): RunReport {
-  return { runId: 'r1', demo: false, exportName: 'isEligible', sourceFile: 'src/age.ts', contextFiles: ['src/age.ts', 'src/age.test.ts'], cases: [], mutations: [], scores: {}, ...over } as RunReport;
+  return { runId: 'r1', status: 'completed', demo: false, exportName: 'isEligible', sourceFile: 'src/age.ts', contextFiles: ['src/age.ts', 'src/age.test.ts'], cases: [], mutations: [], scores: {}, ...over } as RunReport;
 }
 
 const mut = (line: number, original: string, replacement: string, baseline?: MutationOutcome, generated?: MutationOutcome, detectingTests: string[] = []): MutationRecord => ({
@@ -107,7 +107,13 @@ describe('scoreSummary', () => {
 
   test('without existing tests, and for baseline-only reports', () => {
     expect(scoreSummary(report({ scores: { generated: { killed: 7, survived: 1, excluded: 0, rate: 7 / 8 } } }))).toBe('TestForge: tests catch 7/8 changes with generated tests');
-    expect(scoreSummary(report({ scores: { baseline: { killed: 2, survived: 2, excluded: 1, rate: 0.5 } } }))).toBe('TestForge: tests catch 2/4 changes');
+    expect(scoreSummary(report({ scores: { baseline: { killed: 2, survived: 2, excluded: 1, rate: 0.5 } } }))).toBe('TestForge: tests catch 2/4 changes (1 excluded or not run)');
+  });
+
+  test('a run that did not complete names its status and what was not scored', () => {
+    const scores = { baseline: { killed: 1, survived: 0, excluded: 5, rate: 1 }, generated: { killed: 3, survived: 0, excluded: 5, rate: 1 }, comparison: { denominator: 1, before: 1, after: 1, excluded: 7 } };
+    expect(scoreSummary(report({ status: 'partial', scores, demo: true }))).toBe('TestForge: existing tests catch 1/1 changes → 1/1 with generated tests (PARTIAL, 7 excluded or not run, DEMO)');
+    expect(scoreSummary(report({ status: 'partial', scores: { generated: scores.generated } }))).toBe('TestForge: tests catch 3/3 changes with generated tests (PARTIAL, 5 excluded or not run)');
   });
 
   test('is undefined when nothing was scored', () => {
@@ -149,6 +155,11 @@ describe('possibleBugs', () => {
   test('an unknown evidence file or a missing failure message still gives a readable warning', () => {
     const [b] = possibleBugs(discount([kase({ title: 'two\nlines', evidence: evidence('F9', 1, 'x'), failureMessage: undefined })]));
     expect(b).toEqual({ caseId: 'tf-1', message: 'Possible bug: "two lines" is documented but fails against the code.', evidence: undefined });
+  });
+
+  test('invisible and bidi characters in a title collapse to one space', () => {
+    const [b] = possibleBugs(discount([kase({ title: 'a\u200bb\u200c\u200dc\u2060d\u202ee', failureMessage: undefined })]));
+    expect(b.message).toMatch(/^Possible bug: "a b c d e" is documented/);
   });
 });
 

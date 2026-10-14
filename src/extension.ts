@@ -16,6 +16,7 @@ import type { ModelProvider } from './providers/provider';
 import { modelLabel, VsCodeLmProvider } from './providers/vscodeLm';
 import { proofMarkdown } from './report/markdown';
 import { applyGenerated, pruneHistory, staleReasons, StoredRun } from './storage/apply';
+import { ToolConfirmations } from './ui/confirmations';
 import { EditorInsights } from './ui/insights';
 import { ResultsProvider } from './ui/results';
 import { fmtScore, summarize } from './ui/summary';
@@ -52,6 +53,9 @@ function showRun(run: StoredRun | undefined): void {
   const stale = run ? staleReasons(run, dirtyPaths()) : [];
   results.show(run, stale);
   insights.show(run, stale);
+  // Results view title buttons (package.json menus).
+  void vscode.commands.executeCommand('setContext', 'testforge.hasRun', !!run);
+  void vscode.commands.executeCommand('setContext', 'testforge.hasGeneratedTests', !!run?.report.generatedTest);
 }
 
 // ---------- guards ----------
@@ -87,7 +91,7 @@ async function ensureConsent(provider: ModelProvider | undefined, files: string[
   const mode = provider ? 'DEMO' : 'Audit';
   const send = !sends
     ? `${mode} mode: nothing is sent to any model. This permission covers both Run Demo and Audit Existing Tests.\n\nTestForge uses these files:\n${files.join('\n')}`
-    : `TestForge will send ${files.length} file(s) to ${sends.label}:\n${files.join('\n')}\n\nOnly the selected module, its relative imports and its existing tests are sent, in up to ${LIMITS.maxModelRequests} requests (a correction retry and an improvement request for missed changes).`;
+    : `TestForge will send ${files.length} file(s) to ${sends.label}:\n${files.join('\n')}\n\nOnly the selected module, its relative imports, its existing tests (next to it or in __tests__/, test/ or tests/) and the files those tests import are sent, in up to ${LIMITS.maxModelRequests} requests (a correction retry and an improvement request for missed changes).`;
   const detail = `${send}\n\nIt will also run your project's TypeScript compiler and Vitest on temporary copies of these files. This runs your code as you. Temporary copies are NOT a security sandbox.`;
   for (;;) {
     const pick = await vscode.window.showWarningMessage('Allow TestForge for this workspace?', { modal: true, detail }, 'Allow', 'Show Outgoing Context');
@@ -249,7 +253,10 @@ async function generate(mode: 'generate' | 'demo' | 'audit', uri?: vscode.Uri, e
     if (!(await ensureConsent(how.provider, analysis.files.map((f) => f.rel), prompt))) return void log('Not started: consent was not given.');
 
     const report = await execute(root, target, how);
-    void vscode.commands.executeCommand('testforge.results.focus');
+    // Focusing the view blurs the editor, and VS Code then drops the CodeLens refresh that showRun()
+    // requested; ask again once the focus has moved, so the score lens updates without a click.
+    await vscode.commands.executeCommand('testforge.results.focus').then(undefined, () => undefined);
+    insights.refreshLenses();
     const scored = report.mode === 'audit' ? ` Existing tests: ${fmtScore(report.scores.baseline)}.` : '';
     const summary = report.failure ? `${report.status.toUpperCase()}: ${report.failure.message}` : `${report.status.toUpperCase()}.${scored} See the TestForge Results view.`;
     if (report.status !== 'completed') void vscode.window.showWarningMessage(`TestForge ${summary}`);
@@ -292,15 +299,18 @@ function toolTarget(input: ToolInput): { root: string; uri: vscode.Uri; exportNa
 }
 
 /**
- * Runs that the user confirmed in prepareInvocation (mode, function, model and files). invoke() runs only a
- * confirmed run, so a change between the confirmation and the run (another model, another import) asks again.
+ * The run the latest prepareInvocation of each call confirmed (mode, function, model and files). invoke() runs only
+ * that run, so a change between the confirmation and the run (another model, another import) asks again, and a
+ * declined confirmation or a prepare without one leaves nothing to run.
  */
-const confirmed = new Set<string>();
+const confirmed = new ToolConfirmations();
 const consentKey = (mode: string, target: { uri: vscode.Uri; exportName: string }, analysis: TargetAnalysis, model?: vscode.LanguageModelChat) =>
   [mode, target.uri.fsPath, target.exportName, model?.id ?? '', ...analysis.files.map((f) => f.rel)].join('\n');
 
 /** The confirmation is the consent for tool runs: it says which files go to which model, and that project code runs. */
 async function prepareTool(mode: 'audit' | 'generate', input: ToolInput): Promise<vscode.PreparedToolInvocation> {
+  const call = { mode, filePath: input?.filePath, functionName: input?.functionName };
+  confirmed.clear(call);
   // Without a resolvable run there is nothing to confirm: invoke() reports the problem without running anything.
   const checking = { invocationMessage: `TestForge: checking ${input?.filePath ?? 'the request'}` };
   let target, analysis, model;
@@ -313,7 +323,7 @@ async function prepareTool(mode: 'audit' | 'generate', input: ToolInput): Promis
     return checking;
   }
   if (mode === 'generate' && !model) return checking;
-  confirmed.add(consentKey(mode, target, analysis, model));
+  confirmed.confirm(call, consentKey(mode, target, analysis, model));
   const files = analysis.files.map((f) => f.rel).join(', ');
   const fn = `${target.exportName} (${vscode.workspace.asRelativePath(target.uri)})`;
   const risk = 'This runs your code as you; temporary copies are NOT a security sandbox.';
@@ -334,24 +344,36 @@ async function prepareTool(mode: 'audit' | 'generate', input: ToolInput): Promis
 
 /** Runs one tool call: the same guards and shared run as the commands, without any dialog. Never applies tests. */
 async function invokeTool(mode: 'audit' | 'generate', input: ToolInput, token: vscode.CancellationToken): Promise<vscode.LanguageModelToolResult> {
-  if (!vscode.workspace.isTrusted) throw new Error('TestForge needs a trusted workspace to analyze or run code. Ask the user to trust this workspace.');
-  const target = toolTarget(input);
+  const call = { mode, filePath: input?.filePath, functionName: input?.functionName };
+  /** Logs why a tool call did not start and returns the reason, the message for the calling model. */
+  const notRun = (reason: string): string => {
+    confirmed.clear(call);
+    log(`Not started (chat tool): ${reason}`);
+    return reason;
+  };
+  if (!vscode.workspace.isTrusted) throw new Error(notRun('TestForge needs a trusted workspace to analyze or run code. Ask the user to trust this workspace.'));
+  let target: ReturnType<typeof toolTarget>;
+  try {
+    target = toolTarget(input);
+  } catch (e) {
+    throw new Error(notRun((e as Error).message));
+  }
   const release = mutex.tryAcquire(target.root);
-  if (!release) throw new Error('A TestForge run is already active in this workspace. Wait until it finishes, then call this tool again.');
+  if (!release) throw new Error(notRun('A TestForge run is already active in this workspace. Wait until it finishes, then call this tool again.'));
   try {
     let analysis: TargetAnalysis;
     try {
       analysis = preflight(target.root, target.uri.fsPath, target.exportName, mode);
     } catch (e) {
       // The analyzer states precisely what is outside the support matrix.
-      if (e instanceof TestForgeError) return toolText(`TestForge cannot run on ${target.exportName} in ${vscode.workspace.asRelativePath(target.uri)}: ${e.message}`);
+      if (e instanceof TestForgeError) return toolText(notRun(`TestForge cannot run on ${target.exportName} in ${vscode.workspace.asRelativePath(target.uri)}: ${e.message}`));
       throw e;
     }
     const dirty = unsaved(target.root, analysis).map((d) => vscode.workspace.asRelativePath(d.uri));
-    if (dirty.length) throw new Error(`Unsaved changes in ${dirty.join(', ')}. TestForge runs the saved files: ask the user to save them, then call this tool again.`);
+    if (dirty.length) throw new Error(notRun(`Unsaved changes in ${dirty.join(', ')}. TestForge runs the saved files: ask the user to save them, then call this tool again.`));
     const model = mode === 'generate' ? await currentModel(false) : undefined;
-    if (mode === 'generate' && !model) throw new Error('No language model is available to TestForge. Ask the user to sign in to a model provider such as GitHub Copilot, or to pick a model with "TestForge: Select Model".');
-    if (!confirmed.delete(consentKey(mode, target, analysis, model))) throw new Error('The files or the model changed after the confirmation, so TestForge did not run. Call this tool again.');
+    if (mode === 'generate' && !model) throw new Error(notRun('No language model is available to TestForge. Ask the user to sign in to a model provider such as GitHub Copilot, or to pick a model with "TestForge: Select Model".'));
+    if (!confirmed.take(call, consentKey(mode, target, analysis, model))) throw new Error(notRun('This call was not confirmed for these files and this model (they may have changed after the confirmation), so TestForge did not run. Call this tool again.'));
     const report = await execute(target.root, target, model ? { provider: new VsCodeLmProvider(model) } : { mode: 'audit' }, token);
     return toolText(summarize(report));
   } finally {
@@ -387,10 +409,12 @@ async function previewTests(): Promise<void> {
     void vscode.window.showInformationMessage('No generated tests to preview.');
     return;
   }
+  // A read-only document, not a diff against an empty file. The tab and breadcrumbs show the path;
+  // the file name keeps the .ts extension (TypeScript highlighting) and starts with the run's state.
   const stale = staleReasons(run, dirtyPaths());
-  const left = previewUri(`/${run.report.runId}/empty`, '');
-  const right = previewUri(`/${run.report.runId}/${run.report.generatedTestPath}`, run.report.generatedTest);
-  await vscode.commands.executeCommand('vscode.diff', left, right, `New file: ${run.report.generatedTestPath}${stale.length ? ' (STALE)' : ''}${run.report.demo ? ' (DEMO)' : ''}`);
+  const state = ['NEW FILE', ...(stale.length ? ['STALE'] : []), ...(run.report.demo ? ['DEMO'] : [])].join(', ');
+  const rel = path.posix.parse(run.report.generatedTestPath);
+  await openPreview(`/${run.report.runId}/${rel.dir ? `${rel.dir}/` : ''}[${state}] ${rel.base}`, run.report.generatedTest);
 }
 
 async function showMutation(id: string): Promise<void> {
@@ -485,17 +509,47 @@ async function openReport(): Promise<void> {
 
 // ---------- CodeLens ----------
 
-class LensProvider implements vscode.CodeLensProvider {
-  provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
-    if (doc.uri.scheme !== 'file' || /\.(test|spec|d)\.ts$/.test(doc.fileName)) return [];
-    let audit = false; // only modules with existing tests can be audited
-    try {
-      audit = adjacentTestNames(doc.fileName, vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.fsPath).length > 0;
-    } catch {
-      // folder not readable: no audit lens
+class LensProvider implements vscode.CodeLensProvider, vscode.Disposable {
+  private readonly emitter = new vscode.EventEmitter<void>();
+  readonly onDidChangeCodeLenses = this.emitter.event;
+  /** Per workspace folder ('' outside one): whether a module has existing tests. Cleared by the file watcher. */
+  private readonly tested = new Map<string, Map<string, boolean>>();
+
+  /** Files changed on disk in this folder: look for tests again on the next request. */
+  forget(folder: string): void {
+    this.tested.delete(folder);
+  }
+
+  refresh(): void {
+    this.emitter.fire();
+  }
+
+  dispose(): void {
+    this.emitter.dispose();
+  }
+
+  private hasTests(doc: vscode.TextDocument): boolean {
+    const root = vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.fsPath;
+    let known = this.tested.get(root ?? '');
+    if (!known) this.tested.set(root ?? '', (known = new Map()));
+    let audit = known.get(doc.fileName);
+    if (audit === undefined) {
+      try {
+        audit = adjacentTestNames(doc.fileName, root).length > 0;
+      } catch {
+        audit = false; // folder not readable: no audit lens
+      }
+      known.set(doc.fileName, audit);
     }
-    return findExports(parse(doc.fileName, doc.getText()))
-      .filter((e) => e.eligible)
+    return audit;
+  }
+
+  provideCodeLenses(doc: vscode.TextDocument, token: vscode.CancellationToken): vscode.CodeLens[] {
+    if (doc.uri.scheme !== 'file' || /\.(test|spec|d)\.ts$/.test(doc.fileName)) return [];
+    const eligible = findExports(parse(doc.fileName, doc.getText())).filter((e) => e.eligible);
+    if (!eligible.length || token.isCancellationRequested) return [];
+    const audit = this.hasTests(doc); // only modules with existing tests can be audited
+    return eligible
       .flatMap((e) => {
         const range = new vscode.Range(e.line - 1, 0, e.line - 1, 0);
         const lenses = [new vscode.CodeLens(range, { title: 'TestForge: Generate & Verify Tests', command: 'testforge.generateAndVerify', arguments: [doc.uri, e.name] })];
@@ -503,6 +557,28 @@ class LensProvider implements vscode.CodeLensProvider {
         return lenses;
       });
   }
+}
+
+// ---------- file watcher ----------
+
+/**
+ * Changes on disk that the editor events miss (a pull, a terminal edit, a test file created outside
+ * the editor): after a short pause, look for tests again and recheck the shown run's freshness.
+ */
+function watchFiles(lenses: LensProvider): vscode.Disposable {
+  const watcher = vscode.workspace.createFileSystemWatcher('**/*.ts');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const changed = (uri: vscode.Uri) => {
+    if (uri.path.includes('/node_modules/')) return;
+    lenses.forget(vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath ?? '');
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      lenses.refresh();
+      const run = results.current();
+      if (run) showRun(run);
+    }, 300);
+  };
+  return vscode.Disposable.from(watcher, watcher.onDidCreate(changed), watcher.onDidChange(changed), watcher.onDidDelete(changed), { dispose: () => clearTimeout(timer) });
 }
 
 // ---------- activation ----------
@@ -524,13 +600,16 @@ export function activate(context: vscode.ExtensionContext): { lastReport(): RunR
   }
 
   const cmd = (id: string, fn: (...args: never[]) => unknown) => vscode.commands.registerCommand(id, fn);
+  const lenses = new LensProvider();
   context.subscriptions.push(
     output,
     previewEmitter,
     insights,
     vscode.window.registerTreeDataProvider('testforge.results', results),
     vscode.workspace.registerTextDocumentContentProvider(PREVIEW_SCHEME, { onDidChange: previewEmitter.event, provideTextDocumentContent: (u) => previews.get(u.toString()) ?? '' }),
-    vscode.languages.registerCodeLensProvider({ language: 'typescript', scheme: 'file' }, new LensProvider()),
+    lenses,
+    watchFiles(lenses),
+    vscode.languages.registerCodeLensProvider({ language: 'typescript', scheme: 'file' }, lenses),
     vscode.lm.registerTool('testforge_auditTests', chatTool('audit')),
     vscode.lm.registerTool('testforge_generateAndVerify', chatTool('generate')),
     cmd('testforge.generateAndVerify', (uri?: vscode.Uri, name?: string) => generate('generate', uri, name)),

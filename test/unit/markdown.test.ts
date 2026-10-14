@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { CaseRecord, MutationRecord, RunReport } from '../../src/core/types';
-import { mdCode, mdText, proofMarkdown } from '../../src/report/markdown';
+import { mdCellCode, mdCode, mdText, proofMarkdown, visible } from '../../src/report/markdown';
 
 const mutation = (line: number, original: string, replacement: string, baseline: MutationRecord['baseline'], generated: MutationRecord['generated']): MutationRecord => ({
   id: `m-${line}${replacement}`,
@@ -63,7 +63,7 @@ describe('proofMarkdown', () => {
     expect(md).toContain('| Existing tests | 1 / 3 |');
     expect(md).toContain('| With TestForge tests | 3 / 3 |');
     expect(md).toContain('On the same 3 mutation(s): **1 → 3** detected.');
-    expect(md).toContain('| 3 | `>=` → `>` | **missed** | detected |');
+    expect(md).toContain('| 3 | <code>&#62;&#61;</code> → <code>&#62;</code> | **missed** | detected |');
     expect(md).toContain('Cases: 1 accepted (1 backed by docs or existing tests, 0 inferred), 0 failing');
     expect(md).not.toContain('DEMO');
     expect(md).not.toContain('Possible bugs');
@@ -84,19 +84,19 @@ describe('proofMarkdown', () => {
     expect(md).toContain('> Audit of the existing tests: no AI model and no generated tests.');
     expect(md).toContain('| Existing tests | 1 / 3 |');
     expect(md).not.toContain('With TestForge tests');
-    expect(md).toContain('| 3 | `>=` → `>` | **missed** |');
+    expect(md).toContain('| 3 | <code>&#62;&#61;</code> → <code>&#62;</code> | **missed** |');
     expect(md).not.toContain('Cases:');
   });
 
   test('stale runs say so, with escaped reasons', () => {
     const md = proofMarkdown(report(), ['src/age.ts changed', 'new test file src/a_b.test.ts']);
-    expect(md).toContain('> STALE: src/age.ts changed; new test file src/a\\_b.test.ts. These results may not match the current code.');
+    expect(md).toContain('> STALE: src\\/age\\.ts changed; new test file src\\/a\\_b\\.test\\.ts. These results may not match the current code.');
     expect(proofMarkdown(report())).not.toContain('STALE');
   });
 
   test('failed runs say why and show no scores', () => {
     const md = proofMarkdown(report({ status: 'failed', failure: { kind: 'baseline-failure', message: 'Pre-existing test failure: x' }, mutations: [], scores: {} }));
-    expect(md).toContain('Run ended **FAILED**: Pre-existing test failure: x');
+    expect(md).toContain('Run ended **FAILED**: Pre\\-existing test failure\\: x');
     expect(md).not.toContain('| Suite |');
   });
 
@@ -104,8 +104,38 @@ describe('proofMarkdown', () => {
     const hostile = kase('<img src=x onerror=alert(1)> [click](http://evil) | col', { originalOutcome: 'failed', failureMessage: '</details><script>x</script>' });
     const md = proofMarkdown(report({ cases: [hostile], mutations: [mutation(4, 'a || b', 'a && b', 'survived', 'killed')] }));
     expect(md).not.toMatch(/(^|[^\\])<(img|script|\/details><script)/m);
-    expect(md).toContain('\\<img src=x onerror=alert(1)\\> \\[click\\](http://evil) \\| col');
-    expect(md).toContain('| 4 | `a \\|\\| b` → `a && b` |');
+    expect(md).toContain('\\<img src\\=x onerror\\=alert\\(1\\)\\> \\[click\\]\\(http\\:\\/\\/evil\\) \\| col');
+    expect(md).toContain('| 4 | <code>a &#124;&#124; b</code> → <code>a &#38;&#38; b</code> |');
+  });
+
+  test('a fragment with an escaped pipe stays in its table cell', () => {
+    const md = proofMarkdown(report({ mutations: [mutation(5, '/^\\s*\\|/.test(s)', 'true', 'killed', 'killed')] }));
+    const row = md.split('\n').find((l) => l.startsWith('| 5 |'));
+    expect(row).toBe('| 5 | <code>&#47;&#94;&#92;s&#42;&#92;&#124;&#47;&#46;test&#40;s&#41;</code> → <code>true</code> | detected | detected |');
+    expect(row?.split('|').length).toBe(6);
+  });
+
+  test('model text cannot form links, mentions or entities', () => {
+    const title = 'see https://evil.example/a www.evil.example @octocat &ZeroWidthSpace;&rlm;';
+    const md = proofMarkdown(report({ cases: [kase(title, { originalOutcome: 'failed' })] }));
+    expect(md).toContain(
+      '- see https\\:\\/\\/evil\\.example\\/a www\\.evil\\.example \uff20octocat \\&ZeroWidthSpace\\;\\&rlm\\;',
+    );
+    const line = md.split('\n').find((l) => l.startsWith('- see')) ?? '';
+    expect(line).not.toMatch(/@|[^\\](&|:|\.)[a-z]/i);
+  });
+
+  test('a partial run says so and counts what was not scored', () => {
+    const md = proofMarkdown(
+      report({
+        status: 'partial',
+        scores: { baseline: { killed: 1, survived: 2, excluded: 5, rate: 1 / 3 }, generated: { killed: 3, survived: 0, excluded: 5, rate: 1 }, comparison: { denominator: 3, before: 1, after: 3, excluded: 5 } },
+      }),
+    );
+    expect(md).toContain('Run ended **PARTIAL**: not every check ran, so these results are incomplete.');
+    expect(md).toContain('| Existing tests | 1 / 3 (5 excluded or not run) |');
+    expect(md).toContain('| With TestForge tests | 3 / 3 (5 excluded or not run) |');
+    expect(proofMarkdown(report())).not.toMatch(/PARTIAL|excluded/);
   });
 });
 
@@ -113,7 +143,7 @@ describe('helpers', () => {
   test('mdCode handles backticks, pipes, newlines and empty replacements', () => {
     expect(mdCode('a `b` c')).toBe('``a `b` c``');
     expect(mdCode('`x`')).toBe('`` `x` ``');
-    expect(mdCode('a|b')).toBe('`a\\|b`');
+    expect(mdCode('a|b')).toBe('`a|b`');
     expect(mdCode('a\nb')).toBe('`a b`');
     expect(mdCode('')).toBe('(removed)');
   });
@@ -126,5 +156,12 @@ describe('helpers', () => {
   test('hidden and bidi characters cannot reorder text', () => {
     expect(mdText('a\u202eb\u2066\u200bc')).toBe('a b c');
     expect(mdCode('x\u2028y\u202dz')).toBe('`x y z`');
+    expect(mdCellCode('a\u2060b\u202ec')).toBe('<code>a b c</code>');
+    expect(visible('[\u202e]\u200b\u2063(\ufeff)')).toBe('[ ] ( )');
+  });
+
+  test('mdCellCode turns every ASCII punctuation character into an entity', () => {
+    expect(mdCellCode('a`b*c<d>|&')).toBe('<code>a&#96;b&#42;c&#60;d&#62;&#124;&#38;</code>');
+    expect(mdCellCode('')).toBe('(removed)');
   });
 });

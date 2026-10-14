@@ -56,17 +56,20 @@
       {
         "command": "testforge.copyProof",
         "title": "Copy Test Proof (Markdown)",
-        "category": "TestForge"
+        "category": "TestForge",
+        "icon": "$(copy)"
       },
       {
         "command": "testforge.previewTests",
         "title": "Preview Generated Tests",
-        "category": "TestForge"
+        "category": "TestForge",
+        "icon": "$(eye)"
       },
       {
         "command": "testforge.applyTests",
         "title": "Apply Tests",
-        "category": "TestForge"
+        "category": "TestForge",
+        "icon": "$(check)"
       },
       {
         "command": "testforge.applyFailingCandidate",
@@ -76,7 +79,8 @@
       {
         "command": "testforge.discardRun",
         "title": "Discard Run",
-        "category": "TestForge"
+        "category": "TestForge",
+        "icon": "$(trash)"
       },
       {
         "command": "testforge.clearHistory",
@@ -153,22 +157,22 @@
       "view/title": [
         {
           "command": "testforge.previewTests",
-          "when": "view == testforge.results",
+          "when": "view == testforge.results && testforge.hasGeneratedTests",
           "group": "navigation@1"
         },
         {
           "command": "testforge.applyTests",
-          "when": "view == testforge.results",
+          "when": "view == testforge.results && testforge.hasGeneratedTests",
           "group": "navigation@2"
         },
         {
           "command": "testforge.discardRun",
-          "when": "view == testforge.results",
+          "when": "view == testforge.results && testforge.hasRun",
           "group": "navigation@3"
         },
         {
           "command": "testforge.copyProof",
-          "when": "view == testforge.results",
+          "when": "view == testforge.results && testforge.hasRun",
           "group": "1_proof@1"
         }
       ]

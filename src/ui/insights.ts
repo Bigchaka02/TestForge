@@ -58,6 +58,11 @@ export class EditorInsights implements vscode.CodeLensProvider, vscode.Disposabl
     this.render();
   }
 
+  /** Asks VS Code for the score lens again, e.g. after a focus change dropped its pending refresh. */
+  refreshLenses(): void {
+    this.lensEmitter.fire();
+  }
+
   provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
     const v = this.view;
     if (!v?.summary || doc.uri.toString() !== v.source.toString()) return [];

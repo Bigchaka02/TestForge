@@ -67,12 +67,15 @@ export function summarize(r: RunReport): string {
         'Write plain test() or it() calls with string titles and expect(); TestForge cannot run .each/.only/.skip, hooks, vi or snapshots.',
     );
   }
-  if (!audit && r.generatedTest) {
+  // Apply refuses a run that ended with a failure (cancelled, unstable, deadline, ...), so only offer it otherwise.
+  if (!audit && r.generatedTest && r.generatedTestPath && !r.failure) {
     const failing = accepted.some((c) => c.originalOutcome !== 'passed');
     lines.push(
       `The generated tests are NOT applied: nothing was written to the workspace. The user can review them in the TestForge Results view and create ${r.generatedTestPath} ` +
         `with the command "TestForge: Apply Tests"${failing ? ' ("TestForge: Apply Failing Candidate" keeps failing cases)' : ''}.`,
     );
+  } else if (!audit && r.generatedTest) {
+    lines.push(`Nothing was written to the workspace, and the generated tests cannot be applied because the run ended ${r.status.toUpperCase()}. Call this tool again for a complete run.`);
   }
   return lines.join('\n');
 }

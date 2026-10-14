@@ -111,6 +111,15 @@ describe('chat tool summary', () => {
     expect(text).not.toMatch(/node_modules|node:internal|testforge-run-/);
   });
 
+  test('a run that Apply refuses does not offer Apply', () => {
+    const failed = { status: 'cancelled', failure: { kind: 'cancelled', message: 'Cancelled.' }, cases: [accepted('accepts 18', 'passed')], generatedTest: '// generated\n', generatedTestPath: 'src/age.testforge.r1.test.ts' } satisfies Partial<RunReport>;
+    const text = summarize(report({ mode: 'generate', ...failed }));
+    expect(text).not.toMatch(/Apply Tests|Apply Failing Candidate/);
+    expect(text).toContain('Nothing was written to the workspace, and the generated tests cannot be applied because the run ended CANCELLED.');
+    // A partial run without a failure (deadline during the mutation checks) can still be applied.
+    expect(summarize(report({ mode: 'generate', status: 'partial', cases: failed.cases, generatedTest: failed.generatedTest, generatedTestPath: failed.generatedTestPath }))).toContain('"TestForge: Apply Tests"');
+  });
+
   test('a report saved without a mode is a generate run', () => {
     const text = summarize(
       report({
