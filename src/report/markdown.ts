@@ -5,26 +5,40 @@ import type { MutationOutcome, RunReport, SuiteScore } from '../core/types';
 const WORD: Record<MutationOutcome, string> = { killed: 'detected', survived: '**missed**', invalid: 'invalid', timeout: 'timeout', error: 'error', 'not-run': 'not run' };
 
 // Control, invisible and bidi characters: they can hide or reorder text in a review (Trojan Source).
-const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff]+/g;
+const HIDDEN = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]+/g;
 
-/** Plain text safe in a Markdown table cell or list item: one line, no HTML, no table breaks. */
+/** Untrusted display text with every control, invisible and bidi character run replaced by one space. */
+export const visible = (s: string): string => s.replace(HIDDEN, ' ');
+
+/**
+ * Plain text safe in a Markdown table cell or list item: one line, every ASCII punctuation character
+ * backslash-escaped (no HTML, links, entities or table breaks), and `@` as a full-width \uff20 sign,
+ * since a backslash does not stop GitHub's @mentions.
+ */
 export const mdText = (s: string, max = 200) =>
-  s
-    .replace(HIDDEN, ' ')
+  visible(s)
     .slice(0, max)
-    .replace(/[\\`*_[\]<>|#~!]/g, (c) => `\\${c}`);
+    .replace(/@/g, '\uff20')
+    .replace(/[!-/:-@[-`{-~]/g, '\\$&');
 
-/** Inline code span that survives backticks and pipes inside table cells. */
+/** Inline code span that survives backticks; not for table cells (see mdCellCode). */
 export function mdCode(s: string): string {
   if (!s) return '(removed)';
-  const one = s.replace(HIDDEN, ' ').replace(/\|/g, '\\|');
+  const one = visible(s);
   const longest = Math.max(0, ...(one.match(/`+/g) ?? []).map((r) => r.length));
   const fence = '`'.repeat(longest + 1);
   const pad = one.startsWith('`') || one.endsWith('`') ? ' ' : '';
   return `${fence}${pad}${one}${pad}${fence}`;
 }
 
-const ratio = (s?: SuiteScore) => (!s ? 'n/a' : s.rate === null ? 'N/A (no valid mutations)' : `${s.killed} / ${s.killed + s.survived}`);
+/**
+ * Code in a table cell: an HTML code element with every ASCII punctuation character as a numeric
+ * entity, so no fragment (`\|` included) can end the cell or form Markdown.
+ */
+export const mdCellCode = (s: string): string => (s ? `<code>${visible(s).replace(/[!-/:-@[-`{-~]/g, (c) => `&#${c.charCodeAt(0)};`)}</code>` : '(removed)');
+
+/** A partial run's score covers only the mutations that ran, so the rest is counted next to it. */
+const ratio = (s?: SuiteScore) => (!s ? 'n/a' : s.rate === null ? 'N/A (no valid mutations)' : `${s.killed} / ${s.killed + s.survived}${s.excluded ? ` (${s.excluded} excluded or not run)` : ''}`);
 
 /** `stale`: why the run may no longer match the code (relative paths, from staleReasons). */
 export function proofMarkdown(report: RunReport, stale: string[] = []): string {
@@ -40,6 +54,7 @@ export function proofMarkdown(report: RunReport, stale: string[] = []): string {
   if (r.failure) {
     out.push(`Run ended **${r.status.toUpperCase()}**: ${mdText(r.failure.message, 400)}`);
   } else if (r.mutations.length || r.scores.generated || r.scores.baseline) {
+    if (r.status !== 'completed') out.push(`Run ended **${r.status.toUpperCase()}**: not every check ran, so these results are incomplete.`, '');
     out.push('| Suite | Hypothetical bugs detected |', '|---|---|');
     if (r.scores.baseline) out.push(`| Existing tests | ${ratio(r.scores.baseline)} |`);
     if (!auditOnly) out.push(`| ${r.scores.baseline ? 'With TestForge tests' : 'TestForge tests'} | ${ratio(r.scores.generated)} |`);
@@ -71,7 +86,7 @@ export function proofMarkdown(report: RunReport, stale: string[] = []): string {
     out.push(auditOnly ? '| Line | Change | Existing tests |' : r.scores.baseline ? '| Line | Change | Existing tests | With TestForge tests |' : '| Line | Change | TestForge tests |');
     out.push(auditOnly || !r.scores.baseline ? '|---|---|---|' : '|---|---|---|---|');
     for (const m of r.mutations) {
-      const change = `${mdCode(m.original)} → ${mdCode(m.replacement)}`;
+      const change = `${mdCellCode(m.original)} → ${mdCellCode(m.replacement)}`;
       const base = m.baseline ? WORD[m.baseline] : 'n/a';
       const gen = m.generated ? WORD[m.generated] : 'n/a';
       out.push(auditOnly ? `| ${m.line} | ${change} | ${base} |` : r.scores.baseline ? `| ${m.line} | ${change} | ${base} | ${gen} |` : `| ${m.line} | ${change} | ${gen} |`);

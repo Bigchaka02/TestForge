@@ -29,7 +29,7 @@ export const LIMITS = {
 
 export type Limits = { -readonly [K in keyof typeof LIMITS]: number };
 
-export const CONSENT_POLICY_VERSION = 1;
+export const CONSENT_POLICY_VERSION = 2;
 
 export type Stage =
   | 'idle'

@@ -103,6 +103,20 @@ describe('TestForge extension (smoke)', () => {
     assert.ok(!(await lenses('clamp.ts')).includes('testforge.auditTests'), 'audit CodeLens in clamp.ts, which has no tests');
   });
 
+  it('notices a test file created outside the editor', async () => {
+    await getExtension().activate();
+    const { uri } = await vscode.workspace.openTextDocument(vscode.Uri.file(path.join(workspaceRoot(), 'src', 'clamp.ts')));
+    const audit = async () => ((await vscode.commands.executeCommand<vscode.CodeLens[]>('vscode.executeCodeLensProvider', uri, 100)) ?? []).some((l) => l.command?.command === 'testforge.auditTests');
+    const test = path.join(workspaceRoot(), 'src', 'clamp.test.ts');
+    fs.writeFileSync(test, '// created on disk by the smoke test\n');
+    try {
+      await waitFor('an audit CodeLens in clamp.ts after clamp.test.ts was created on disk', async () => ((await audit()) ? true : undefined));
+    } finally {
+      fs.rmSync(test, { force: true });
+    }
+    await waitFor('the audit CodeLens to go after clamp.test.ts was deleted', async () => ((await audit()) ? undefined : true));
+  });
+
   it('runDemo on isEligible produces a report', async function () {
     const ext = getExtension();
     const api = await ext.activate();
@@ -195,6 +209,18 @@ describe('TestForge extension (smoke)', () => {
     assert.match(md, /^### TestForge proof: `finalPrice` in `src\/discount\.ts`\n\n> DEMO run/);
     assert.match(md, /\*\*Possible bugs\*\*[^\n]*\n- member order of exactly 100 costs 90: /);
     assert.doesNotMatch(md, /STALE/);
+  });
+
+  it('previews the generated tests as one read-only document', async () => {
+    await vscode.commands.executeCommand('testforge.previewTests');
+    const doc = await waitFor('the preview document', () => {
+      const d = vscode.window.activeTextEditor?.document;
+      return d?.uri.scheme === 'testforge-preview' ? d : undefined;
+    });
+    assert.match(doc.uri.path, /\/src\/\[NEW FILE, DEMO\] discount\.testforge\.[^/]+\.test\.ts$/);
+    assert.equal(doc.languageId, 'typescript');
+    assert.match(doc.getText(), /finalPrice/);
+    await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
   });
 
   it('contributes both chat tools to vscode.lm.tools', async () => {
